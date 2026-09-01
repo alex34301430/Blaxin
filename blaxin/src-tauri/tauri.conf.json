@@ -35,9 +35,7 @@
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
-      "icons/128x128@2x.png",
-      "icons/icon.icns",
-      "icons/icon.ico"
+      "icons/128x128@2x.png"
     ],
     "category": "Utility",
     "shortDescription": "Personal AI Desktop Agent",
@@ -45,6 +43,20 @@
     "linux": {
       "deb": {
         "depends": ["nodejs", "npm"]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://api.github.com/repos/alex3430/Blaxin/releases/latest"
+      ],
+      "pubkey": "",
+      "windows": {
+        "title": "BLAXIN Updater"
       }
     }
   }

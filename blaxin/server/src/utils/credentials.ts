@@ -2,17 +2,20 @@ import { ProviderId, ProviderCredentials } from '../types.js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto';
+import { hostname, userInfo } from 'os';
 
 const CREDENTIALS_FILE = join(process.cwd(), '.blaxin-credentials');
 const ENCRYPTION_KEY_ENV = 'BLAXIN_SECRET';
 
 function getEncryptionKey(): Buffer {
   const envKey = process.env[ENCRYPTION_KEY_ENV];
-  if (envKey) {
+  if (envKey && envKey.length >= 64) {
     return Buffer.from(envKey, 'hex');
   }
-  // Derive from a default key - in production this should be set properly
-  return scryptSync('blaxin-default-encryption-key', 'blaxin-salt-16bytes', 32);
+  // Derive a machine-specific key from hostname + username
+  // This is not perfect security, but better than a hardcoded key
+  const machineId = `${hostname()}-${userInfo().username}-blaxin-credential-key`;
+  return scryptSync(machineId, 'blaxin-v1-salt', 32);
 }
 
 function encrypt(text: string): string {

@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+target/
+
+# Tauri build artifacts
+src-tauri/target/
+
+# Credentials and secrets (NEVER commit)
+.blaxin-credentials
+blaxin-config.json
+*.env
+.env
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+
+# Temporary files
+/tmp/
+*.tmp
+*.bak
+
+# Docker (build artifacts, not source)
+nginx/certbot/

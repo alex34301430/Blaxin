@@ -207,10 +207,10 @@ app.get('/api/agent/history', (_req, res) => {
 const server = createServer(app);
 
 // WebSocket server (agent)
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: false, maxPayload: 10 * 1024 * 1024 });
 
 // WebSocket server (terminal)
-const terminalWss = new WebSocketServer({ server, path: '/ws/terminal' });
+const terminalWss = new WebSocketServer({ server, path: '/ws/terminal', perMessageDeflate: false, maxPayload: 5 * 1024 * 1024 });
 
 wss.on('connection', (ws) => {
   logger.info('websocket', 'Client connected');
@@ -286,9 +286,31 @@ server.listen(PORT, '0.0.0.0', async () => {
 });
 
 // Graceful shutdown
-process.on('SIGINT', () => {
+const shutdown = () => {
   logger.info('server', 'Shutting down...');
+  wss.clients.forEach(client => {
+    try { client.close(1001, 'Server shutting down'); } catch {}
+  });
+  terminalWss.clients.forEach(client => {
+    try { client.close(1001, 'Server shutting down'); } catch {}
+  });
   wss.close();
-  server.close();
-  process.exit(0);
+  terminalWss.close();
+  server.close(() => {
+    process.exit(0);
+  });
+  // Force exit after 5 seconds
+  setTimeout(() => process.exit(0), 5000);
+};
+
+process.on('SIGINT', shutdown);
+process.on('SIGTERM', shutdown);
+process.on('SIGHUP', shutdown);
+
+// Prevent crashes from unhandled errors
+process.on('uncaughtException', (error) => {
+  logger.error('server', 'Uncaught exception', error);
+});
+process.on('unhandledRejection', (reason) => {
+  logger.error('server', 'Unhandled rejection', reason);
 });

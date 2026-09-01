@@ -1,13 +1,22 @@
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager, tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent}};
+use tauri::{
+    AppHandle, Manager,
+    tray::{TrayIconBuilder, MouseButton, MouseButtonState, TrayIconEvent},
+};
+use tauri_plugin_updater::UpdaterExt;
 
 struct ServerState {
     child: Mutex<Option<Child>>,
 }
 
-fn find_node_binary() -> String {
+struct AppState {
+    server_state: ServerState,
+}
+
+fn find_node_binary() -> Option<String> {
     let paths = [
         "/usr/bin/node",
         "/usr/local/bin/node",
@@ -16,21 +25,37 @@ fn find_node_binary() -> String {
     ];
 
     for path in &paths {
-        if std::path::Path::new(path).exists() {
-            return path.to_string();
+        if Path::new(path).exists() {
+            return Some(path.to_string());
         }
     }
 
-    "node".to_string()
+    // Try to find node in PATH
+    Command::new("which")
+        .arg("node")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .ok()
+        .and_then(|child| {
+            child.wait_with_output().ok().and_then(|output| {
+                let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                if !path.is_empty() && Path::new(&path).exists() {
+                    Some(path)
+                } else {
+                    None
+                }
+            })
+        })
 }
 
-fn find_project_root() -> std::path::PathBuf {
-    let exe_path = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let exe_dir = exe_path.parent().unwrap_or(std::path::Path::new("."));
+fn find_project_root() -> PathBuf {
+    let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
+    let exe_dir = exe_path.parent().unwrap_or(Path::new("."));
 
     let mut candidate = exe_dir.to_path_buf();
 
-    for _ in 0..6 {
+    for _ in 0..8 {
         if candidate.join("server").join("package.json").exists() {
             return candidate;
         }
@@ -42,51 +67,59 @@ fn find_project_root() -> std::path::PathBuf {
         }
     }
 
-    std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
-fn start_server(project_root: &std::path::Path) -> Result<Child, String> {
+fn install_dependencies(project_root: &Path) -> Result<(), String> {
     let server_dir = project_root.join("server");
-
-    if !server_dir.exists() {
-        return Err(format!("Server directory not found at {:?}", server_dir));
-    }
-
-    // Check if node_modules exists, if not, install dependencies
     let node_modules = server_dir.join("node_modules");
+
     if !node_modules.exists() {
         eprintln!("[BLAXIN] Installing server dependencies...");
         let npm_install = Command::new("npm")
             .arg("install")
+            .arg("--omit=dev")
             .current_dir(&server_dir)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|e| format!("Failed to run npm install: {}", e))?;
 
-        let _ = npm_install.wait_with_output();
+        let output = npm_install
+            .wait_with_output()
+            .map_err(|e| format!("npm install failed: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("npm install failed: {}", stderr));
+        }
     }
 
-    // Check if TypeScript is compiled, if not build it
-    let dist_dir = server_dir.join("dist");
-    let src_index = server_dir.join("src").join("index.ts");
-    if !dist_dir.exists() && src_index.exists() {
-        eprintln!("[BLAXIN] Building server TypeScript...");
-        let tsc = Command::new("npx")
-            .args(["tsc"])
-            .current_dir(&server_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to build TypeScript: {}", e))?;
-        let _ = tsc.wait_with_output();
+    Ok(())
+}
+
+fn start_server(project_root: &Path) -> Result<Child, String> {
+    let server_dir = project_root.join("server");
+
+    if !server_dir.exists() {
+        return Err(format!(
+            "Server directory not found at {:?}",
+            server_dir
+        ));
     }
 
-    let node_bin = find_node_binary();
+    // Install dependencies if needed
+    install_dependencies(project_root)
+        .map_err(|e| eprintln!("[BLAXIN] Warning: {}", e))
+        .ok();
+
+    let node_bin = find_node_binary().ok_or_else(|| {
+        "Node.js is not installed. Please install Node.js 18+ to run BLAXIN.".to_string()
+    })?;
+
     eprintln!("[BLAXIN] Starting server with node at: {}", node_bin);
     eprintln!("[BLAXIN] Server dir: {:?}", server_dir);
 
-    // Use tsx to run TypeScript directly (avoids need to pre-compile)
     let child = Command::new(&node_bin)
         .args(["--import", "tsx", "src/index.ts"])
         .current_dir(&server_dir)
@@ -95,7 +128,12 @@ fn start_server(project_root: &std::path::Path) -> Result<Child, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Failed to start server: {}. Is Node.js installed? ({})", e, node_bin))?;
+        .map_err(|e| {
+            format!(
+                "Failed to start server: {}. Is Node.js installed? ({})",
+                e, node_bin
+            )
+        })?;
 
     Ok(child)
 }
@@ -106,7 +144,10 @@ fn wait_for_server(timeout: Duration) -> bool {
 
     loop {
         if start.elapsed() > timeout {
-            eprintln!("[BLAXIN] Server startup timed out after {:?}", timeout);
+            eprintln!(
+                "[BLAXIN] Server startup timed out after {:?}",
+                timeout
+            );
             return false;
         }
 
@@ -116,7 +157,7 @@ fn wait_for_server(timeout: Duration) -> bool {
                 return true;
             }
             Err(_) => {
-                std::thread::sleep(Duration::from_millis(200));
+                std::thread::sleep(Duration::from_millis(500));
             }
         }
     }
@@ -144,15 +185,72 @@ fn setup_tray(app: &AppHandle) {
         .expect("Failed to create tray icon");
 }
 
+#[tauri::command]
+async fn check_for_updates(app: AppHandle) -> Result<serde_json::Value, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| e.to_string())?;
+
+    match update {
+        Some(update) => Ok(serde_json::json!({
+            "updateAvailable": true,
+            "currentVersion": update.current_version,
+            "latestVersion": update.version,
+            "downloadUrl": update.download_url,
+            "releaseNotes": update.body.unwrap_or_default(),
+        })),
+        None => Ok(serde_json::json!({
+            "updateAvailable": false,
+        })),
+    }
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<serde_json::Value, String> {
+    let updater = app.updater().map_err(|e| e.to_string())?;
+    let update = updater.check().await.map_err(|e| e.to_string())?;
+
+    match update {
+        Some(update) => {
+            update
+                .download_and_install(
+                    |_chunk_length, _total_content_length| {
+                        // Progress callback - could emit events to frontend
+                    },
+                    || {
+                        eprintln!("[BLAXIN] Download complete, installing update...");
+                    },
+                )
+                .await
+                .map_err(|e| format!("Update installation failed: {}", e))?;
+
+            Ok(serde_json::json!({
+                "success": true,
+                "message": "Update installed. BLAXIN will restart.",
+            }))
+        }
+        None => Ok(serde_json::json!({
+            "success": false,
+            "message": "No update available",
+        })),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let server_state = ServerState {
         child: Mutex::new(None),
     };
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
-        .manage(server_state)
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
+        .manage(AppState { server_state })
+        .invoke_handler(tauri::generate_handler![
+            check_for_updates,
+            install_update,
+        ])
         .setup(|app| {
             // Set up system tray
             setup_tray(app.handle());
@@ -163,24 +261,34 @@ pub fn run() {
             // Start the Node.js server
             match start_server(&project_root) {
                 Ok(child) => {
-                    let state = app.state::<ServerState>();
-                    *state.child.lock().unwrap() = Some(child);
+                    let state = app.state::<AppState>();
+                    *state.server_state.child.lock().unwrap() = Some(child);
 
-                    // Wait for the server to be ready
-                    if wait_for_server(Duration::from_secs(20)) {
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
+                    // Wait for the server to be ready in a background thread
+                    let app_handle = app.handle().clone();
+                    std::thread::spawn(move || {
+                        if wait_for_server(Duration::from_secs(30)) {
+                            if let Some(window) =
+                                app_handle.get_webview_window("main")
+                            {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        } else {
+                            eprintln!(
+                                "[BLAXIN] Server failed to start within timeout"
+                            );
+                            if let Some(window) =
+                                app_handle.get_webview_window("main")
+                            {
+                                let _ = window.show();
+                            }
                         }
-                    } else {
-                        eprintln!("[BLAXIN] Server failed to start within timeout");
-                        if let Some(window) = app.get_webview_window("main") {
-                            let _ = window.show();
-                        }
-                    }
+                    });
                 }
                 Err(e) => {
                     eprintln!("[BLAXIN] Failed to start server: {}", e);
+                    // Show the window anyway so user can see diagnostics
                     if let Some(window) = app.get_webview_window("main") {
                         let _ = window.show();
                     }
@@ -189,28 +297,30 @@ pub fn run() {
 
             Ok(())
         })
-        .on_window_event(|window, event| {
+        .on_window_event(|_window, _event| {
             // Minimize to tray instead of closing
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                #[cfg(not(debug_assertions))]
-                {
-                    api.prevent_close();
-                    if let Some(w) = window.get_webview_window("main") {
-                        let _ = w.hide();
-                    }
+            #[cfg(not(debug_assertions))]
+            if let tauri::WindowEvent::CloseRequested { api, .. } = _event {
+                api.prevent_close();
+                if let Some(w) = _window.get_webview_window("main") {
+                    let _ = w.hide();
                 }
             }
         })
-        .on_event(|app, event| {
-            if let tauri::RunEvent::Exit = event {
-                let state = app.state::<ServerState>();
-                if let Some(mut child) = state.child.lock().unwrap().take() {
+        .build(tauri::generate_context!())
+        .expect("error while running BLAXIN");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Some(state) = app_handle.try_state::<AppState>() {
+                if let Some(mut child) =
+                    state.server_state.child.lock().unwrap().take()
+                {
                     eprintln!("[BLAXIN] Shutting down server...");
                     let _ = child.kill();
                     let _ = child.wait();
                 }
             }
-        })
-        .run(tauri::generate_context!())
-        .expect("error while running BLAXIN");
+        }
+    });
 }

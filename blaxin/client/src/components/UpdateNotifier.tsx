@@ -19,15 +19,68 @@ interface UpdateInfo {
   error?: string;
 }
 
+// Check if Tauri is available
+function isTauri(): boolean {
+  return typeof window !== 'undefined' && '__TAURI__' in window;
+}
+
+// Tauri updater commands
+async function checkTauriUpdate(): Promise<any> {
+  try {
+    const { invoke } = (window as any).__TAURI__.core;
+    return await invoke('check_for_updates');
+  } catch (err) {
+    console.error('[BLAXIN] Tauri update check failed:', err);
+    return null;
+  }
+}
+
+async function installTauriUpdate(): Promise<any> {
+  try {
+    const { invoke } = (window as any).__TAURI__.core;
+    return await invoke('install_update');
+  } catch (err) {
+    console.error('[BLAXIN] Tauri update install failed:', err);
+    return { success: false, message: String(err) };
+  }
+}
+
 export function UpdateNotifier() {
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [showBanner, setShowBanner] = useState(false);
   const [checking, setChecking] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installProgress, setInstallProgress] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [useTauriUpdater, setUseTauriUpdater] = useState(false);
 
   const checkForUpdates = useCallback(async () => {
     setChecking(true);
+    setInstallError(null);
+    
     try {
+      // Try Tauri updater first
+      if (isTauri()) {
+        const tauriResult = await checkTauriUpdate();
+        if (tauriResult && tauriResult.updateAvailable) {
+          setUseTauriUpdater(true);
+          setUpdateInfo({
+            updateAvailable: true,
+            currentVersion: tauriResult.currentVersion,
+            latestVersion: tauriResult.latestVersion,
+            releaseNotes: tauriResult.releaseNotes,
+            releaseDate: tauriResult.releaseDate,
+            downloadUrl: tauriResult.downloadUrl,
+          });
+          if (tauriResult.latestVersion !== dismissed) {
+            setShowBanner(true);
+          }
+          return;
+        }
+      }
+
+      // Fallback to API check
       const result = await fetch('/api/update/check');
       const data = await result.json();
       setUpdateInfo(data);
@@ -48,6 +101,41 @@ export function UpdateNotifier() {
     const interval = setInterval(checkForUpdates, 30 * 60 * 1000); // Every 30 minutes
     return () => clearInterval(interval);
   }, []);
+
+  const handleUpdateNow = async () => {
+    if (useTauriUpdater) {
+      // Use Tauri auto-updater for real automatic update
+      setInstalling(true);
+      setInstallProgress('Checking for updates...');
+      
+      try {
+        const result = await installTauriUpdate();
+        if (result?.success) {
+          setInstallProgress('Update installed! BLAXIN will restart...');
+          // Tauri will handle the restart
+        } else {
+          setInstallError(result?.message || 'Update failed. Please try again or download manually.');
+          setInstalling(false);
+        }
+      } catch (err) {
+        setInstallError('Update failed: ' + String(err));
+        setInstalling(false);
+      }
+    } else {
+      // Fallback: open the release page in browser for manual download
+      if (updateInfo?.downloadUrl) {
+        window.open(updateInfo.downloadUrl, '_blank');
+      }
+    }
+  };
+
+  const handleDismiss = () => {
+    setDismissed(updateInfo?.latestVersion || null);
+    setShowBanner(false);
+    setInstalling(false);
+    setInstallProgress(null);
+    setInstallError(null);
+  };
 
   if (!showBanner || !updateInfo?.updateAvailable) return null;
 
@@ -71,7 +159,7 @@ export function UpdateNotifier() {
       display: 'flex', justifyContent: 'center', padding: '12px 24px',
     }}>
       <div style={{
-        maxWidth: 600, width: '100%',
+        maxWidth: 650, width: '100%',
         background: 'var(--bg-secondary)', border: '1px solid var(--accent-primary)',
         borderRadius: 'var(--radius-lg)', padding: '16px 20px',
         boxShadow: '0 0 40px rgba(0, 240, 255, 0.15)',
@@ -87,10 +175,14 @@ export function UpdateNotifier() {
         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
           <div style={{
             width: 36, height: 36, borderRadius: 'var(--radius-md)',
-            background: 'rgba(0, 240, 255, 0.1)', display: 'flex',
-            alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+            background: installing ? 'rgba(0, 255, 136, 0.1)' : 'rgba(0, 240, 255, 0.1)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
           }}>
-            <FiDownload size={16} color="var(--accent-primary)" />
+            {installing ? (
+              <FiLoader size={16} color="var(--accent-green)" className="spin" />
+            ) : (
+              <FiDownload size={16} color="var(--accent-primary)" />
+            )}
           </div>
 
           <div style={{ flex: 1 }}>
@@ -103,6 +195,13 @@ export function UpdateNotifier() {
                 background: 'rgba(0, 240, 255, 0.15)', color: 'var(--accent-primary)',
                 fontFamily: 'var(--font-mono)', fontWeight: 700,
               }}>{updateInfo.latestVersion}</span>
+              {useTauriUpdater && (
+                <span style={{
+                  padding: '1px 6px', borderRadius: 'var(--radius-sm)', fontSize: 8,
+                  background: 'rgba(0, 255, 136, 0.15)', color: 'var(--accent-green)',
+                  fontFamily: 'var(--font-mono)', fontWeight: 700,
+                }}>AUTO-UPDATE</span>
+              )}
             </div>
 
             <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 8 }}>
@@ -123,8 +222,61 @@ export function UpdateNotifier() {
               </div>
             )}
 
+            {/* Install progress */}
+            {installing && installProgress && (
+              <div style={{
+                padding: '8px 10px', marginBottom: 10,
+                background: 'rgba(0, 255, 136, 0.05)',
+                border: '1px solid rgba(0, 255, 136, 0.2)',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: 12, color: 'var(--accent-green)',
+                display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                <FiLoader size={12} className="spin" />
+                {installProgress}
+              </div>
+            )}
+
+            {/* Install error */}
+            {installError && (
+              <div style={{
+                padding: '8px 10px', marginBottom: 10,
+                background: 'rgba(255, 51, 85, 0.05)',
+                border: '1px solid rgba(255, 51, 85, 0.2)',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: 12, color: 'var(--accent-red)',
+                display: 'flex', alignItems: 'center', gap: 8,
+              }}>
+                <FiAlertTriangle size={12} />
+                {installError}
+              </div>
+            )}
+
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              {updateInfo.downloadUrl ? (
+              {installing ? (
+                <button disabled style={{
+                  padding: '6px 14px',
+                  background: 'rgba(0, 255, 136, 0.1)',
+                  color: 'var(--accent-green)',
+                  borderRadius: 'var(--radius-md)', fontSize: 12, fontWeight: 500,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                  border: '1px solid rgba(0, 255, 136, 0.3)',
+                  opacity: 0.7,
+                }}>
+                  <FiLoader size={12} className="spin" />
+                  Updating...
+                </button>
+              ) : useTauriUpdater ? (
+                <button onClick={handleUpdateNow} style={{
+                  padding: '6px 14px',
+                  background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))',
+                  color: '#fff', borderRadius: 'var(--radius-md)', fontSize: 12, fontWeight: 500,
+                  display: 'flex', alignItems: 'center', gap: 6,
+                }}>
+                  <FiDownload size={12} />
+                  Update Now
+                </button>
+              ) : updateInfo.downloadUrl ? (
                 <a
                   href={updateInfo.downloadUrl}
                   target="_blank"
@@ -147,10 +299,7 @@ export function UpdateNotifier() {
                 </button>
               )}
 
-              <button onClick={() => {
-                setDismissed(updateInfo.latestVersion || null);
-                setShowBanner(false);
-              }} style={{
+              <button onClick={handleDismiss} style={{
                 padding: '6px 12px', background: 'transparent', color: 'var(--text-muted)',
                 borderRadius: 'var(--radius-md)', fontSize: 12,
               }}>
@@ -159,7 +308,7 @@ export function UpdateNotifier() {
             </div>
           </div>
 
-          <button onClick={() => setShowBanner(false)} style={{
+          <button onClick={handleDismiss} style={{
             color: 'var(--text-muted)', background: 'none', flexShrink: 0,
           }}>
             <FiX size={16} />
