@@ -7,12 +7,14 @@ target/
 
 # Tauri build artifacts
 src-tauri/target/
+src-tauri/gen/
 
 # Credentials and secrets (NEVER commit)
 .blaxin-credentials
 blaxin-config.json
 *.env
 .env
+.secrets/
 
 # OS files
 .DS_Store
@@ -30,7 +32,6 @@ Thumbs.db
 npm-debug.log*
 
 # Temporary files
-/tmp/
 *.tmp
 *.bak
 
