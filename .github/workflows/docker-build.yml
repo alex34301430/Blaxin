@@ -1,0 +1,228 @@
+name: Build, Scan, and Push Docker Images
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+      security-events: write  # Required for SARIF upload to GitHub Security tab
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Metadata ───────────────────────────────────────────────
+      - name: Extract Docker metadata — server
+        id: meta-server
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/server
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Extract Docker metadata — client
+        id: meta-client
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/client
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Extract Docker metadata — nginx
+        id: meta-nginx
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/nginx
+          tags: |
+            type=sha,prefix=
+            type=ref,event=branch
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      # ── Build (load locally for scanning) ──────────────────────
+      - name: Build server image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          load: true
+          tags: blaxin-server:scan
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
+
+      - name: Build client image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./client
+          load: true
+          tags: blaxin-client:scan
+          cache-from: type=gha,scope=client
+          cache-to: type=gha,mode=max,scope=client
+
+      - name: Build nginx image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nginx
+          load: true
+          tags: blaxin-nginx:scan
+          cache-from: type=gha,scope=nginx
+          cache-to: type=gha,mode=max,scope=nginx
+
+      # ── Vulnerability scanning ─────────────────────────────────
+      - name: Run Trivy vulnerability scanner — server
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: blaxin-server:scan
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+        continue-on-error: true
+
+      - name: Run Trivy vulnerability scanner — client
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: blaxin-client:scan
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+        continue-on-error: true
+
+      - name: Run Trivy vulnerability scanner — nginx
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: blaxin-nginx:scan
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+        continue-on-error: true
+
+      # ── SARIF reports (GitHub Security tab) ────────────────────
+      - name: Run Trivy scanner (SARIF) — server
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: blaxin-server:scan
+          format: sarif
+          output: trivy-server.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+        continue-on-error: true
+
+      - name: Run Trivy scanner (SARIF) — client
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: blaxin-client:scan
+          format: sarif
+          output: trivy-client.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+        continue-on-error: true
+
+      - name: Run Trivy scanner (SARIF) — nginx
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: blaxin-nginx:scan
+          format: sarif
+          output: trivy-nginx.sarif
+          severity: CRITICAL,HIGH,MEDIUM
+        continue-on-error: true
+
+      - name: Upload SARIF to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: |
+            trivy-server.sarif
+            trivy-client.sarif
+            trivy-nginx.sarif
+          category: docker-vulnerabilities
+
+      # ── Upload scan artifacts ──────────────────────────────────
+      - name: Upload Trivy scan reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-scan-reports
+          path: trivy-*.sarif
+          retention-days: 30
+
+      # ── Push images ────────────────────────────────────────────
+      - name: Push server image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./server
+          push: true
+          tags: ${{ steps.meta-server.outputs.tags }}
+          labels: ${{ steps.meta-server.outputs.labels }}
+          cache-from: type=gha,scope=server
+          cache-to: type=gha,mode=max,scope=server
+
+      - name: Push client image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./client
+          push: true
+          tags: ${{ steps.meta-client.outputs.tags }}
+          labels: ${{ steps.meta-client.outputs.labels }}
+          cache-from: type=gha,scope=client
+          cache-to: type=gha,mode=max,scope=client
+
+      - name: Push nginx image
+        if: github.event_name != 'pull_request'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./nginx
+          push: true
+          tags: ${{ steps.meta-nginx.outputs.tags }}
+          labels: ${{ steps.meta-nginx.outputs.labels }}
+          cache-from: type=gha,scope=nginx
+          cache-to: type=gha,mode=max,scope=nginx
+
+  # ── Deploy to server via SSH ──────────────────────────────────
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy to server
+        if: ${{ vars.SERVER_HOST != '' }}
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ vars.SERVER_HOST }}
+          username: ${{ vars.SERVER_USER || 'root' }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script: |
+            cd ${{ vars.DEPLOY_PATH || '/opt/blaxin' }}
+            git pull origin main
+            docker compose pull
+            docker compose up -d --remove-orphans
+            docker compose exec -T server wget --spider -q http://localhost:3001/api/health
+            echo "✅ Deployed successfully"
