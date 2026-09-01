@@ -53,11 +53,8 @@ jobs:
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev
 
-      - name: Install Rust Tauri dependencies
-        uses: actions-rs/cargo@v1
-        with:
-          command: install
-          args: tauri-cli
+      - name: Install Tauri CLI
+        run: cargo install tauri-cli
 
       - name: Install server dependencies
         working-directory: blaxin/server
@@ -106,36 +103,57 @@ jobs:
           sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION_NUM\"/" tauri.conf.json
           cd ..
 
+      - name: Convert icons to RGBA
+        working-directory: blaxin/src-tauri/icons
+        run: |
+          sudo apt-get install -y imagemagick
+          for f in *.png; do
+            convert "$f" -depth 8 RGBA "$f.tmp" && mv "$f.tmp" "$f"
+            echo "Converted $f to RGBA"
+          done
+
       - name: Build Tauri app (AppImage + deb)
         working-directory: blaxin
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           cd src-tauri
-          cargo tauri build --target x86_64-unknown-linux-gnu 2>&1 || true
+          cargo tauri build --target x86_64-unknown-linux-gnu
           cd ..
 
       - name: Find build artifacts
         id: artifacts
         run: |
-          find blaxin/src-tauri/target -name "*.AppImage" -o -name "*.deb" 2>/dev/null | head -20
-          ARTIFACTS=$(find blaxin/src-tauri/target -name "*.AppImage" -o -name "*.deb" 2>/dev/null)
-          echo "Found artifacts:"
-          echo "$ARTIFACTS"
-          # Copy to root for upload
+          echo "Looking for build artifacts..."
+          find blaxin/src-tauri/target -name "*.AppImage" -o -name "*.deb" -o -name "*.AppImage.tar.gz" -o -name "*.AppImage.tar.gz.sig" 2>/dev/null
+          
           mkdir -p artifacts
-          for f in $ARTIFACTS; do
-            cp "$f" artifacts/ 2>/dev/null || true
-          done
+          
+          # Copy AppImage
+          find blaxin/src-tauri/target -name "*.AppImage" -exec cp {} artifacts/ \;
+          
+          # Copy .deb
+          find blaxin/src-tauri/target -name "*.deb" -exec cp {} artifacts/ \;
+          
+          # Copy update signatures
+          find blaxin/src-tauri/target -name "*.sig" -exec cp {} artifacts/ \;
+          find blaxin/src-tauri/target -name "*.tar.gz" -exec cp {} artifacts/ \;
+          
+          echo "=== Artifacts ==="
           ls -la artifacts/
 
       - name: Generate checksums
         working-directory: artifacts
         run: |
-          for f in *; do
+          for f in *.AppImage *.deb *.tar.gz; do
             if [ -f "$f" ]; then
               sha256sum "$f" > "$f.sha256"
+              echo "Generated checksum for $f"
             fi
           done
-          cat *.sha256
+          echo "=== Checksums ==="
+          cat *.sha256 2>/dev/null || echo "No checksums generated"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -145,6 +163,8 @@ jobs:
             artifacts/*.AppImage
             artifacts/*.deb
             artifacts/*.sha256
+            artifacts/*.sig
+            artifacts/*.tar.gz
           retention-days: 30
 
   release:
@@ -169,34 +189,29 @@ jobs:
         id: notes
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
-          cat > release_notes.md << EOF
+          cat > release_notes.md << 'EOF'
           # BLAXIN ${VERSION}
 
           ## Downloads
 
           | File | Description |
           |------|-------------|
-          | \`blaxin-${VERSION}-x86_64.AppImage\` | Portable Linux app (no install needed) |
-          | \`blaxin_${VERSION}_amd64.deb\` | Debian/Ubuntu package |
+          | `blaxin-${VERSION}-x86_64.AppImage` | Portable Linux app (no install needed) |
+          | `blaxin_${VERSION}_amd64.deb` | Debian/Ubuntu package |
 
           ## Installation
 
           ### AppImage
-          \`\`\`bash
+          ```bash
           chmod +x blaxin-*.AppImage
           ./blaxin-*.AppImage
-          \`\`\`
+          ```
 
           ### .deb package
-          \`\`\`bash
+          ```bash
           sudo dpkg -i blaxin_*.deb
           sudo apt-get install -f  # Fix any missing dependencies
-          \`\`\`
-
-          ## SHA256 Checksums
-          \`\`\`
-          $(cat artifacts/*.sha256 2>/dev/null || echo "See release assets")
-          \`\`\`
+          ```
 
           ## What's Changed
           See commit history for details.
@@ -212,5 +227,7 @@ jobs:
             artifacts/*.AppImage
             artifacts/*.deb
             artifacts/*.sha256
+            artifacts/*.sig
+            artifacts/*.tar.gz
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
