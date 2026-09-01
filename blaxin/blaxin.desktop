@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=BLAXIN
+GenericName=AI Desktop Agent
+Comment=Personal AI Desktop Agent — Control your computer with natural language
+Exec=blaxin %U
+Icon=ai.blaxin.desktop
+Terminal=false
+Categories=Utility;Development;System;
+Keywords=ai;agent;desktop;automation;
+StartupWMClass=blaxin

@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Build outputs
+*/dist/
+*/build/
+src-tauri/target/
+
+# Environment
+.env
+.env.local
+.blaxin-credentials
+blaxin-config.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# TypeScript
+*.tsbuildinfo
+
+# Tauri
+src-tauri/target/

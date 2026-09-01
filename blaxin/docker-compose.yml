@@ -1,0 +1,93 @@
+services:
+  # ── Reverse proxy (single entry point) ────────────────────────
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: blaxin-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:-localhost}
+      - CERTBOT_EMAIL=${CERTBOT_EMAIL:-}
+    volumes:
+      - nginx-html:/usr/share/nginx/html:ro
+      - certbot-certs:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
+    depends_on:
+      server:
+        condition: service_healthy
+      client:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - blaxin-net
+
+  # ── Certbot sidecar (certificate renewal only) ────────────────
+  certbot:
+    image: certbot/certbot:latest
+    container_name: blaxin-certbot
+    volumes:
+      - certbot-certs:/etc/letsencrypt
+      - certbot-webroot:/var/www/certbot
+    # Keep-alive: run renewal check every 12 hours
+    entrypoint: /bin/sh -c "trap exit TERM; while :; do certbot renew --webroot -w /var/www/certbot --quiet; sleep 43200 & wait $${!}; done"
+    restart: unless-stopped
+    networks:
+      - blaxin-net
+
+  # ── API server ────────────────────────────────────────────────
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: blaxin-server
+    # No exposed ports — only accessible via nginx proxy
+    environment:
+      - PORT=3001
+      - NODE_ENV=production
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - TOGETHER_API_KEY=${TOGETHER_API_KEY:-}
+      - BLAXIN_SECRET=${BLAXIN_SECRET:-}
+    volumes:
+      - blaxin-data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:3001/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - blaxin-net
+
+  # ── Client (Vite static build) ────────────────────────────────
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile
+    container_name: blaxin-client
+    # No exposed ports — static files served by nginx
+    volumes:
+      - nginx-html:/usr/share/nginx/html
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - blaxin-net
+
+volumes:
+  blaxin-data:
+  nginx-html:
+  certbot-certs:
+  certbot-webroot:
+
+networks:
+  blaxin-net:
+    driver: bridge
