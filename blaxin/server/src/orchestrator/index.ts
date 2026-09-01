@@ -10,33 +10,51 @@ import { getConfig } from '../utils/config.js';
 
 type EventCallback = (event: string, data: any) => void;
 
-const SYSTEM_PROMPT = `You are BLAXIN, an advanced AI desktop agent. You can control the computer, execute terminal commands, manage files, browse the web, and complete complex multi-step tasks.
+const SYSTEM_PROMPT = `You are BLAXIN, an advanced AI desktop agent running on Linux. You can control the computer, execute terminal commands, manage files, browse the web, and complete complex multi-step tasks.
 
 CAPABILITIES:
-- Execute terminal commands
-- Read, write, and manage files
-- Control the desktop GUI (mouse, keyboard, windows)
-- Take screenshots to observe the screen
-- Open and interact with browsers
-- Search the web
-- Use the clipboard
-- Get system information
+- Execute terminal/shell commands
+- Read, write, create, delete, and manage files/directories
+- Control the desktop GUI: mouse clicks, keyboard input, window management
+- Take screenshots to observe the screen state
+- Open and interact with web browsers
+- Search the web for information
+- Read/write the system clipboard
+- Get system information (CPU, memory, disk, network)
+- Launch and manage applications
 
 BEHAVIOR:
-- Break complex tasks into clear steps
-- Execute one action at a time
-- Verify results after important actions
-- If an action fails, try an alternative approach
-- Ask for confirmation before destructive operations
-- Report progress clearly and concisely
-- Never expose API keys or secrets
+- Break complex tasks into clear, sequential steps
+- Execute one tool action at a time
+- After executing a tool, analyze the result before proceeding
+- If an action fails, diagnose the failure and try a safe alternative
+- Verify important actions (e.g., after clicking, take a screenshot to confirm)
+- For destructive operations (delete, overwrite), confirm with the user first
+- Report progress clearly and concisely at each step
+- Never expose API keys, secrets, or sensitive system information
+- When a task is complete, provide a clear summary of what was done
+
+ERROR RECOVERY:
+- If a tool fails, analyze why it failed before retrying
+- For network errors: check connectivity, try again after a brief pause
+- For permission errors: explain what permission is needed
+- For missing tools: suggest installing the required tool
+- For file not found: check the path, list the directory to find the correct file
+- Never retry the exact same failed action more than once
+- If recovery is impossible, explain the limitation clearly
+
+VERIFICATION:
+- After launching an application, take a screenshot to confirm it opened
+- After clicking a button/UI element, verify the expected change occurred
+- After writing a file, verify the content was written correctly
+- After running a command, check the exit code and output for errors
 
 When using tools:
-1. Think about which tool is needed
-2. Provide the correct arguments
-3. Wait for the result
-4. Analyze the result
-5. Decide the next step
+1. Think about which tool is needed and why
+2. Provide the correct arguments with proper formatting
+3. Wait for the tool result
+4. Analyze the result - did it succeed? If not, why?
+5. Decide the next step based on the result
 
 Always provide a clear final answer when the task is complete.`;
 
@@ -243,12 +261,14 @@ export class AgentOrchestrator {
         description: `Execute ${toolName}`,
         action: JSON.stringify({ tool: toolName, args: toolArgs }),
       });
-      // For now, we'll proceed with confirmation. In production, this would wait.
       logger.info('orchestrator', `Confirmation required for ${toolName} but proceeding`);
     }
 
-    this.setState('executing', `Using tool: ${toolName}`);
+    // Describe the action in user-friendly terms
+    const actionDescription = this.describeToolAction(toolName, toolArgs);
+    this.setState('executing', actionDescription);
     this.emit('tool-execution', { toolName, args: toolArgs, state: 'executing' });
+    this.emit('activity', { type: 'executing', content: actionDescription });
 
     // Add tool call to conversation
     const toolMsg: ChatMessage = {
@@ -260,8 +280,18 @@ export class AgentOrchestrator {
     };
     this.conversationHistory.push(toolMsg);
 
-    // Execute the tool
-    const result = await toolRegistry.execute(toolName, toolArgs);
+    // Execute the tool with retry for transient errors
+    let result = await toolRegistry.execute(toolName, toolArgs);
+    let retries = 0;
+    const maxRetries = 1; // Only retry once for transient errors
+
+    while (!result.success && retries < maxRetries && this.isRetryableError(result.error || '')) {
+      retries++;
+      logger.info('orchestrator', `Retrying tool ${toolName} (attempt ${retries + 1})`);
+      this.emit('activity', { type: 'retrying', content: `Retrying ${toolName}...` });
+      await new Promise(r => setTimeout(r, 1000)); // Brief pause before retry
+      result = await toolRegistry.execute(toolName, toolArgs);
+    }
 
     this.emit('tool-execution', {
       toolName,
@@ -284,6 +314,43 @@ export class AgentOrchestrator {
     this.conversationHistory.push(resultMsg);
 
     logger.info('orchestrator', `Tool ${toolName}: ${result.success ? 'success' : 'failed'}`);
+  }
+
+  private isRetryableError(error: string): boolean {
+    const retryable = ['timeout', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'network', 'temporary'];
+    return retryable.some(r => error.toLowerCase().includes(r));
+  }
+
+  private describeToolAction(toolName: string, args: Record<string, unknown>): string {
+    switch (toolName) {
+      case 'terminal':
+        return `Running: ${(args.command as string || '').slice(0, 60)}`;
+      case 'screenshot':
+        return 'Taking screenshot...';
+      case 'computer-control': {
+        const action = args.action as string;
+        if (action === 'mouse_click') return `Clicking at (${args.x}, ${args.y})`;
+        if (action === 'type_text') return `Typing text...`;
+        if (action === 'key_press') return `Pressing key: ${args.key}`;
+        if (action === 'launch_app') return `Launching: ${args.app}`;
+        if (action === 'list_windows') return 'Listing open windows...';
+        return `Computer control: ${action}`;
+      }
+      case 'filesystem':
+        return `File operation: ${args.operation} on ${(args.path as string || '').split('/').pop()}`;
+      case 'browser':
+        if (args.action === 'search') return `Searching: ${args.query}`;
+        if (args.action === 'open_url') return `Opening: ${args.url}`;
+        return `Browser: ${args.action}`;
+      case 'clipboard':
+        return args.action === 'read' ? 'Reading clipboard...' : 'Writing to clipboard...';
+      case 'search':
+        return `Searching web: ${args.query}`;
+      case 'system-info':
+        return `Getting ${args.info} system info...`;
+      default:
+        return `Using ${toolName}...`;
+    }
   }
 
   getState(): AgentState {

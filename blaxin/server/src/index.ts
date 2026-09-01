@@ -10,6 +10,7 @@ import { logger } from './utils/logger.js';
 import { loadConfig, saveConfig } from './utils/config.js';
 import { credentialStore } from './utils/credentials.js';
 import { runDiagnostics } from './utils/diagnostics.js';
+import { APP_VERSION, GITHUB_REPO, GITHUB_RELEASES_URL } from './utils/version.js';
 import { ProviderId, AppConfig } from './types.js';
 
 const PORT = parseInt(process.env.PORT || '3001');
@@ -20,7 +21,52 @@ app.use(express.json());
 
 // Health check
 app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', version: '1.0.0', uptime: process.uptime() });
+  res.json({ status: 'ok', version: APP_VERSION, uptime: process.uptime() });
+});
+
+// Version & Update check
+app.get('/api/version', (_req, res) => {
+  res.json({ version: APP_VERSION, repo: GITHUB_REPO });
+});
+
+app.get('/api/update/check', async (_req, res) => {
+  try {
+    const response = await fetch(GITHUB_RELEASES_URL, {
+      headers: { 'User-Agent': `BLAXIN/${APP_VERSION}` },
+    });
+    
+    if (!response.ok) {
+      return res.json({ updateAvailable: false, error: 'Failed to check for updates' });
+    }
+    
+    const release = await response.json() as any;
+    const latestVersion = release.tag_name?.replace(/^v/, '') || '';
+    const updateAvailable = latestVersion && latestVersion !== APP_VERSION;
+    
+    // Find Linux assets (AppImage, .deb)
+    const assets = (release.assets || []).filter((a: any) => 
+      a.name?.endsWith('.AppImage') || a.name?.endsWith('.deb')
+    );
+    
+    res.json({
+      updateAvailable,
+      currentVersion: APP_VERSION,
+      latestVersion,
+      releaseName: release.name || `v${latestVersion}`,
+      releaseNotes: release.body || '',
+      releaseDate: release.published_at || '',
+      downloadUrl: release.html_url || '',
+      assets: assets.map((a: any) => ({
+        name: a.name,
+        size: a.size,
+        downloadUrl: a.browser_download_url,
+        contentType: a.content_type,
+      })),
+    });
+  } catch (error: any) {
+    logger.error('update', 'Failed to check for updates', error);
+    res.json({ updateAvailable: false, error: error.message });
+  }
 });
 
 // Diagnostics

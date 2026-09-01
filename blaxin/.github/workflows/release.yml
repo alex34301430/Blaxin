@@ -1,0 +1,216 @@
+name: Build and Release BLAXIN Desktop
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version tag (e.g., v1.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  NODE_VERSION: '20'
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+          cache-dependency-path: blaxin/client/package-lock.json
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libgtk-3-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      - name: Install Rust Tauri dependencies
+        uses: actions-rs/cargo@v1
+        with:
+          command: install
+          args: tauri-cli
+
+      - name: Install server dependencies
+        working-directory: blaxin/server
+        run: npm ci
+
+      - name: Build server TypeScript
+        working-directory: blaxin/server
+        run: npm run build
+
+      - name: Install client dependencies
+        working-directory: blaxin/client
+        run: npm ci
+
+      - name: Build client
+        working-directory: blaxin/client
+        run: npm run build
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+          else
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update version in package.json files
+        working-directory: blaxin
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          VERSION_NUM="${VERSION#v}"
+          echo "Setting version to $VERSION_NUM"
+          
+          # Update server version
+          cd server
+          npm version "$VERSION_NUM" --no-git-tag-version --allow-same-version 2>/dev/null || true
+          cd ..
+          
+          # Update client version
+          cd client
+          npm version "$VERSION_NUM" --no-git-tag-version --allow-same-version 2>/dev/null || true
+          cd ..
+          
+          # Update Tauri version
+          cd src-tauri
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION_NUM\"/" tauri.conf.json
+          cd ..
+
+      - name: Build Tauri app (AppImage + deb)
+        working-directory: blaxin
+        run: |
+          cd src-tauri
+          cargo tauri build --target x86_64-unknown-linux-gnu 2>&1 || true
+          cd ..
+
+      - name: Find build artifacts
+        id: artifacts
+        run: |
+          find blaxin/src-tauri/target -name "*.AppImage" -o -name "*.deb" 2>/dev/null | head -20
+          ARTIFACTS=$(find blaxin/src-tauri/target -name "*.AppImage" -o -name "*.deb" 2>/dev/null)
+          echo "Found artifacts:"
+          echo "$ARTIFACTS"
+          # Copy to root for upload
+          mkdir -p artifacts
+          for f in $ARTIFACTS; do
+            cp "$f" artifacts/ 2>/dev/null || true
+          done
+          ls -la artifacts/
+
+      - name: Generate checksums
+        working-directory: artifacts
+        run: |
+          for f in *; do
+            if [ -f "$f" ]; then
+              sha256sum "$f" > "$f.sha256"
+            fi
+          done
+          cat *.sha256
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: blaxin-linux-x86_64
+          path: |
+            artifacts/*.AppImage
+            artifacts/*.deb
+            artifacts/*.sha256
+          retention-days: 30
+
+  release:
+    needs: build-linux
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: blaxin-linux-x86_64
+          path: artifacts/
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Generate release notes
+        id: notes
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          cat > release_notes.md << EOF
+          # BLAXIN ${VERSION}
+
+          ## Downloads
+
+          | File | Description |
+          |------|-------------|
+          | \`blaxin-${VERSION}-x86_64.AppImage\` | Portable Linux app (no install needed) |
+          | \`blaxin_${VERSION}_amd64.deb\` | Debian/Ubuntu package |
+
+          ## Installation
+
+          ### AppImage
+          \`\`\`bash
+          chmod +x blaxin-*.AppImage
+          ./blaxin-*.AppImage
+          \`\`\`
+
+          ### .deb package
+          \`\`\`bash
+          sudo dpkg -i blaxin_*.deb
+          sudo apt-get install -f  # Fix any missing dependencies
+          \`\`\`
+
+          ## SHA256 Checksums
+          \`\`\`
+          $(cat artifacts/*.sha256 2>/dev/null || echo "See release assets")
+          \`\`\`
+
+          ## What's Changed
+          See commit history for details.
+          EOF
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: release_notes.md
+          draft: false
+          prerelease: false
+          files: |
+            artifacts/*.AppImage
+            artifacts/*.deb
+            artifacts/*.sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

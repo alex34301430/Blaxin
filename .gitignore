@@ -1,17 +1,16 @@
 # Dependencies
 node_modules/
-*/node_modules/
 
 # Build outputs
-*/dist/
-*/build/
-src-tauri/target/
+blaxin/client/dist/
+blaxin/server/dist/
+blaxin/src-tauri/target/
 
 # Environment
 .env
 .env.local
-.blaxin-credentials
-blaxin-config.json
+blaxin/.blaxin-credentials
+blaxin/blaxin-config.json
 
 # IDE
 .vscode/
@@ -29,6 +28,3 @@ Thumbs.db
 
 # TypeScript
 *.tsbuildinfo
-
-# Tauri
-src-tauri/target/

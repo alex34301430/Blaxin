@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ChatPanel } from './components/ChatPanel';
 import { ActivityPanel } from './components/ActivityPanel';
@@ -6,14 +6,32 @@ import { TerminalPanel } from './components/TerminalPanel';
 import { SettingsModal } from './components/SettingsModal';
 import { StatusBar } from './components/StatusBar';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
+import { SetupWizard } from './components/SetupWizard';
+import { UpdateNotifier } from './components/UpdateNotifier';
 import { useAppStore } from './utils/store';
 import { useWebSocket } from './hooks/useWebSocket';
 import { api } from './services/api';
 import './theme/cyberpunk.css';
 
+const SETUP_KEY = 'blaxin-setup-complete';
+
 export default function App() {
-  const { connected, settingsOpen, sidebarOpen, currentPage } = useAppStore();
+  const { connected, settingsOpen, sidebarOpen, currentPage, activeModel } = useAppStore();
   const { sendMessage, stopAgent, clearHistory } = useWebSocket();
+  const [showSetup, setShowSetup] = useState(false);
+
+  // First-run detection
+  useEffect(() => {
+    const setupComplete = localStorage.getItem(SETUP_KEY);
+    if (!setupComplete && !activeModel) {
+      setShowSetup(true);
+    }
+  }, []);
+
+  const handleSetupComplete = () => {
+    localStorage.setItem(SETUP_KEY, 'true');
+    setShowSetup(false);
+  };
 
   useEffect(() => {
     // Load initial data
@@ -69,6 +87,8 @@ export default function App() {
       </main>
 
       {settingsOpen && <SettingsModal />}
+      {showSetup && <SetupWizard onComplete={handleSetupComplete} />}
+      {!showSetup && <UpdateNotifier />}
     </div>
   );
 }
