@@ -37,3 +37,7 @@ npm-debug.log*
 
 # Docker (build artifacts, not source)
 nginx/certbot/
+
+# Bundled resources (large binaries, built in CI)
+resources/
+resources/**/*

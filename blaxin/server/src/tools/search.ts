@@ -35,53 +35,97 @@ export class SearchTool implements Tool {
     }
 
     try {
-      // Use Google search via scraping (basic approach)
-      const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}&num=${numResults}`;
+      // Use DuckDuckGo Lite (HTML version) - more reliable for scraping
+      const ddgUrl = `https://lite.duckduckgo.com/lite/?q=${encodeURIComponent(query)}`;
       
-      const response = await fetch(searchUrl, {
+      const response = await fetch(ddgUrl, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml',
+          'Accept': 'text/html',
           'Accept-Language': 'en-US,en;q=0.9',
         },
       });
 
       if (!response.ok) {
-        return { success: false, output: '', error: `Search failed: HTTP ${response.status}` };
+        // Fallback: try opening the browser search
+        return { 
+          success: false, 
+          output: '', 
+          error: `Search service returned HTTP ${response.status}. Try using the browser tool instead.` 
+        };
       }
 
       const html = await response.text();
       
-      // Basic HTML parsing for search results
       const results: Array<{ title: string; url: string; snippet: string }> = [];
       
-      // Extract search results using regex patterns
-      const linkPattern = /<a[^>]*href="\/url\?q=([^&"]+)[^"]*"[^>]*>(.*?)<\/a>/g;
-      const snippetPattern = /<div[^>]*class="[^"]*"[^>]*>(.*?)<\/div>/g;
+      // DuckDuckGo Lite uses simple table-based HTML
+      // Extract result links: <a rel="nofollow" class="result-link" href="URL">TITLE</a>
+      const linkPattern = /<a[^>]*class="result-link"[^>]*href="([^"]+)"[^>]*>([^<]*(?:<[^>]+>[^<]*)*)<\/a>/gi;
+      // Extract snippets from result snippets
+      const snippetPattern = /<td[^>]*class="result-snippet"[^>]*>([\s\S]*?)<\/td>/gi;
       
+      // Collect all links
+      const links: Array<{ url: string; title: string }> = [];
       let match;
-      while ((match = linkPattern.exec(html)) && results.length < numResults) {
-        const url = decodeURIComponent(match[1]);
+      while ((match = linkPattern.exec(html))) {
+        const url = match[1].trim();
         const title = match[2].replace(/<[^>]+>/g, '').trim();
-        if (title && url && !url.includes('google.com')) {
-          results.push({
-            title,
-            url,
-            snippet: '',
-          });
+        if (title && url && !url.includes('duckduckgo.com')) {
+          links.push({ url, title });
         }
+      }
+      
+      // Collect snippets
+      const snippets: string[] = [];
+      while ((match = snippetPattern.exec(html))) {
+        snippets.push(match[1].replace(/<[^>]+>/g, '').trim());
+      }
+      
+      // Combine links and snippets
+      for (let i = 0; i < Math.min(links.length, numResults); i++) {
+        results.push({
+          title: links[i].title,
+          url: links[i].url,
+          snippet: snippets[i] || '',
+        });
+      }
+
+      if (results.length === 0) {
+        // If DDG Lite parsing fails, try the HTML API as fallback
+        try {
+          const apiResponse = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`);
+          if (apiResponse.ok) {
+            const apiData = await apiResponse.json() as any;
+            const abstract = apiData.AbstractText || '';
+            const relatedTopics = (apiData.RelatedTopics || []).slice(0, numResults);
+            
+            if (abstract) {
+              results.push({ title: query, url: apiData.AbstractURL || '', snippet: abstract });
+            }
+            for (const topic of relatedTopics) {
+              if (topic.Text && topic.FirstURL) {
+                results.push({ title: topic.Text.slice(0, 100), url: topic.FirstURL, snippet: '' });
+              }
+            }
+          }
+        } catch {}
       }
 
       if (results.length === 0) {
         return {
           success: true,
-          output: `Search completed for "${query}" but parsing returned no results. Try opening a browser instead.`,
+          output: `Search completed for "${query}" but no structured results were found. Try opening a browser to search directly.`,
           data: { query, results: [] },
         };
       }
 
       const output = results
-        .map((r, i) => `${i + 1}. ${r.title}\n   ${r.url}`)
+        .map((r, i) => {
+          let entry = `${i + 1}. ${r.title}\n   URL: ${r.url}`;
+          if (r.snippet) entry += `\n   ${r.snippet}`;
+          return entry;
+        })
         .join('\n\n');
 
       return {

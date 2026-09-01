@@ -16,7 +16,20 @@ struct AppState {
     server_state: ServerState,
 }
 
-fn find_node_binary() -> Option<String> {
+/// Find the bundled Node.js binary from Tauri resources.
+/// In production, this is at <resource_dir>/node/bin/node.
+/// In dev mode, fall back to system node.
+fn find_bundled_node(resource_dir: &Path) -> Option<String> {
+    // Try bundled node first (production build)
+    let bundled = resource_dir.join("node").join("bin").join("node");
+    if bundled.exists() {
+        eprintln!("[BLAXIN] Using bundled node: {:?}", bundled);
+        return Some(bundled.to_string_lossy().to_string());
+    }
+    None
+}
+
+fn find_system_node() -> Option<String> {
     let paths = [
         "/usr/bin/node",
         "/usr/local/bin/node",
@@ -30,7 +43,6 @@ fn find_node_binary() -> Option<String> {
         }
     }
 
-    // Try to find node in PATH
     Command::new("which")
         .arg("node")
         .stdout(Stdio::piped())
@@ -49,90 +61,89 @@ fn find_node_binary() -> Option<String> {
         })
 }
 
-fn find_project_root() -> PathBuf {
+fn find_node_binary(resource_dir: &Path) -> Option<String> {
+    // In production: use bundled node. In dev: use system node.
+    find_bundled_node(resource_dir).or_else(find_system_node)
+}
+
+/// Find the server directory - either bundled resource or development source
+fn find_server_dir(resource_dir: &Path) -> Option<PathBuf> {
+    // Production: bundled server in resources
+    let bundled_server = resource_dir.join("blaxin-server");
+    if bundled_server.join("dist").join("index.js").exists() {
+        eprintln!("[BLAXIN] Using bundled server at {:?}", bundled_server);
+        return Some(bundled_server);
+    }
+
+    // Development: server in project tree
     let exe_path = std::env::current_exe().unwrap_or_else(|_| PathBuf::from("."));
     let exe_dir = exe_path.parent().unwrap_or(Path::new("."));
 
     let mut candidate = exe_dir.to_path_buf();
-
     for _ in 0..8 {
-        if candidate.join("server").join("package.json").exists() {
-            return candidate;
+        if candidate.join("server").join("dist").join("index.js").exists() {
+            return Some(candidate.join("server"));
         }
-        if candidate.join("package.json").exists() && candidate.join("server").exists() {
-            return candidate;
+        if candidate.join("server").join("package.json").exists() {
+            return Some(candidate.join("server"));
         }
         if !candidate.pop() {
             break;
         }
     }
 
-    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-}
-
-fn install_dependencies(project_root: &Path) -> Result<(), String> {
-    let server_dir = project_root.join("server");
-    let node_modules = server_dir.join("node_modules");
-
-    if !node_modules.exists() {
-        eprintln!("[BLAXIN] Installing server dependencies...");
-        let npm_install = Command::new("npm")
-            .arg("install")
-            .arg("--omit=dev")
-            .current_dir(&server_dir)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to run npm install: {}", e))?;
-
-        let output = npm_install
-            .wait_with_output()
-            .map_err(|e| format!("npm install failed: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("npm install failed: {}", stderr));
-        }
+    // Last resort: current directory
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let server = cwd.join("server");
+    if server.exists() {
+        return Some(server);
     }
 
-    Ok(())
+    None
 }
 
-fn start_server(project_root: &Path) -> Result<Child, String> {
-    let server_dir = project_root.join("server");
-
-    if !server_dir.exists() {
-        return Err(format!(
-            "Server directory not found at {:?}",
-            server_dir
-        ));
-    }
-
-    // Install dependencies if needed
-    install_dependencies(project_root)
-        .map_err(|e| eprintln!("[BLAXIN] Warning: {}", e))
-        .ok();
-
-    let node_bin = find_node_binary().ok_or_else(|| {
-        "Node.js is not installed. Please install Node.js 18+ to run BLAXIN.".to_string()
+fn start_server(resource_dir: &Path) -> Result<Child, String> {
+    let node_bin = find_node_binary(resource_dir).ok_or_else(|| {
+        "Node.js runtime not found. The application may be misconfigured.".to_string()
     })?;
 
-    eprintln!("[BLAXIN] Starting server with node at: {}", node_bin);
-    eprintln!("[BLAXIN] Server dir: {:?}", server_dir);
+    let server_dir = find_server_dir(resource_dir).ok_or_else(|| {
+        "Server directory not found. The application may be misconfigured.".to_string()
+    })?;
+
+    // Determine entry point: compiled dist/index.js or TypeScript src/index.ts
+    let (entry_args, entry_dir): (Vec<String>, PathBuf) = if server_dir.join("dist").join("index.js").exists() {
+        eprintln!("[BLAXIN] Starting compiled server from dist/index.js");
+        (vec![
+            server_dir.join("dist").join("index.js").to_string_lossy().to_string(),
+        ], server_dir.clone())
+    } else if server_dir.join("src").join("index.ts").exists() {
+        eprintln!("[BLAXIN] Starting TypeScript server with tsx");
+        (vec![
+            "--import".to_string(),
+            "tsx".to_string(),
+            server_dir.join("src").join("index.ts").to_string_lossy().to_string(),
+        ], server_dir.clone())
+    } else {
+        return Err(format!(
+            "No server entry point found in {:?}", server_dir
+        ));
+    };
+
+    eprintln!("[BLAXIN] Node binary: {}", node_bin);
+    eprintln!("[BLAXIN] Server dir: {:?}", entry_dir);
+    eprintln!("[BLAXIN] Entry args: {:?}", entry_args);
 
     let child = Command::new(&node_bin)
-        .args(["--import", "tsx", "src/index.ts"])
-        .current_dir(&server_dir)
+        .args(&entry_args)
+        .current_dir(&entry_dir)
         .env("PORT", "3001")
         .env("NODE_ENV", "production")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| {
-            format!(
-                "Failed to start server: {}. Is Node.js installed? ({})",
-                e, node_bin
-            )
+            format!("Failed to start server: {}", e)
         })?;
 
     Ok(child)
@@ -255,11 +266,15 @@ pub fn run() {
             // Set up system tray
             setup_tray(app.handle());
 
-            let project_root = find_project_root();
-            eprintln!("[BLAXIN] Project root: {:?}", project_root);
+            // Resolve resource directory for bundled node + server
+            let resource_dir = app
+                .path()
+                .resource_dir()
+                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
+            eprintln!("[BLAXIN] Resource dir: {:?}", resource_dir);
 
             // Start the Node.js server
-            match start_server(&project_root) {
+            match start_server(&resource_dir) {
                 Ok(child) => {
                     let state = app.state::<AppState>();
                     *state.server_state.child.lock().unwrap() = Some(child);
@@ -278,6 +293,7 @@ pub fn run() {
                             eprintln!(
                                 "[BLAXIN] Server failed to start within timeout"
                             );
+                            // Show the window anyway so user can see diagnostics
                             if let Some(window) =
                                 app_handle.get_webview_window("main")
                             {

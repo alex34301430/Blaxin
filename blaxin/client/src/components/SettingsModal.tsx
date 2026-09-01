@@ -486,50 +486,67 @@ function ModelsTab({
   const freeModels = models.filter(m => m.isFree);
   const paidModels = models.filter(m => !m.isFree);
 
-  // Smart recommendations based on model capabilities and known models
+  // Smart recommendations based on model capabilities, provider, and known model quality
   const recommendations: Recommendation[] = [
     {
       label: '★ BEST FREE',
-      reason: 'Top free model with best overall capability',
+      reason: 'Top free model with function-calling and large context',
       model: freeModels.find(m => 
+        m.capabilities.includes('function-calling') && 
+        (m.contextWindow || 0) >= 16000 &&
+        (m.id.includes('llama-3') || m.id.includes('qwen') || m.id.includes('deepseek') || m.id.includes('mistral'))
+      ) || freeModels.find(m => 
         m.capabilities.includes('function-calling') && 
         (m.contextWindow || 0) >= 8000
       ) || freeModels[0],
       color: 'var(--accent-green)',
     },
     {
-      label: '⚡ BEST FOR CODING',
-      reason: 'Optimized for code generation and debugging',
-      model: freeModels.find(m => 
-        m.id.includes('code') || m.id.includes('coder') || 
-        m.id.includes('deepseek') || m.capabilities.includes('code-generation')
-      ) || freeModels.find(m => m.capabilities.includes('function-calling')),
-      color: 'var(--accent-primary)',
-    },
-    {
       label: '🤖 BEST FOR AGENT',
-      reason: 'Best at tool calling and multi-step tasks',
+      reason: 'Best at tool calling and multi-step reasoning tasks',
       model: freeModels.find(m => 
         m.capabilities.includes('function-calling') && 
         m.capabilities.includes('reasoning')
+      ) || freeModels.find(m => 
+        m.capabilities.includes('function-calling') &&
+        (m.id.includes('qwen') || m.id.includes('llama') || m.id.includes('deepseek'))
       ) || freeModels.find(m => m.capabilities.includes('function-calling')),
       color: 'var(--accent-secondary)',
     },
     {
-      label: '🚀 FASTEST FREE',
-      reason: 'Lowest latency for quick responses',
+      label: '⚡ BEST FOR CODING',
+      reason: 'Optimized for code generation and debugging',
       model: freeModels.find(m => 
-        m.id.includes('flash') || m.id.includes('mini') || 
-        m.id.includes('haiku') || m.id.includes('groq')
-      ) || freeModels[0],
+        (m.id.includes('code') || m.id.includes('coder') || m.id.includes('codestral')) &&
+        m.capabilities.includes('function-calling')
+      ) || freeModels.find(m => 
+        m.capabilities.includes('code-generation') && m.capabilities.includes('function-calling')
+      ) || freeModels.find(m => 
+        m.id.includes('deepseek') || m.id.includes('qwen-coder')
+      ),
+      color: 'var(--accent-primary)',
+    },
+    {
+      label: '🚀 FASTEST FREE',
+      reason: 'Lowest latency, ideal for quick responses',
+      model: freeModels.find(m => 
+        m.id.includes('flash') && m.capabilities.includes('function-calling')
+      ) || freeModels.find(m => 
+        m.id.includes('mini') && m.capabilities.includes('function-calling')
+      ) || freeModels.find(m => 
+        m.id.includes('groq') || m.id.includes('haiku')
+      ) || freeModels.find(m => 
+        m.capabilities.includes('function-calling') && (m.contextWindow || 0) < 32000
+      ),
       color: 'var(--accent-yellow)',
     },
     {
       label: '💡 LIGHTWEIGHT',
       reason: 'Smallest model, fastest response, good for simple tasks',
       model: freeModels.find(m => 
-        (m.contextWindow || 0) <= 8000 || 
         m.id.includes('7b') || m.id.includes('8b') || m.id.includes('small')
+      ) || freeModels.find(m => 
+        (m.contextWindow || 0) <= 8000
       ) || freeModels[freeModels.length - 1],
       color: 'var(--accent-red)',
     },

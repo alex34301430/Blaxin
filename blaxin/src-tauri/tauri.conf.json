@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "cd ../client && npm run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "cd ../client && npm run build",
+    "beforeBuildCommand": "echo 'Frontend pre-built or using dev server'",
     "frontendDist": "../client/dist"
   },
   "app": {
@@ -35,18 +35,23 @@
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
-      "icons/128x128@2x.png"
+      "icons/128x128@2x.png",
+      "icons/icon.png"
     ],
     "category": "Utility",
     "shortDescription": "Personal AI Desktop Agent",
     "longDescription": "BLAXIN is a personal Linux desktop AI agent that can control your computer, execute terminal commands, manage files, browse the web, and complete complex multi-step tasks.",
     "linux": {
       "deb": {
-        "depends": ["nodejs", "npm"]
+        "depends": []
       },
       "appimage": {
         "bundleMediaFramework": false
       }
+    },
+    "resources": {
+      "../resources/node/bin/node": "node/bin/node",
+      "../resources/blaxin-server/": "blaxin-server"
     }
   },
   "plugins": {
@@ -54,7 +59,7 @@
       "endpoints": [
         "https://api.github.com/repos/alex3430/Blaxin/releases/latest"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYyRUM4QTM0NEU0ODQxQ0MKUldUTVFVaE9OSXJzWWl2WVZkWmlGQStETEVaTTR2MEF4VU8yWnd2MlBoeVVMYlQ2TGtsMHhVZjcK",
+      "pubkey": "RWQdUBByv6OCkX7XeAjzYn7TDuHL4w3tgbhr0Nm04ed0NQBPPphW2N2C",
       "windows": {
         "title": "BLAXIN Updater"
       }

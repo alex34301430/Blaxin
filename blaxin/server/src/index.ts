@@ -43,20 +43,37 @@ app.get('/api/update/check', async (_req, res) => {
     const latestVersion = release.tag_name?.replace(/^v/, '') || '';
     const updateAvailable = latestVersion && latestVersion !== APP_VERSION;
     
-    // Find Linux assets (AppImage, .deb)
-    const assets = (release.assets || []).filter((a: any) => 
-      a.name?.endsWith('.AppImage') || a.name?.endsWith('.deb')
+    // Compare versions semantically
+    let majorUpdate = false;
+    if (updateAvailable && latestVersion && APP_VERSION) {
+      const curr = APP_VERSION.split('.').map(Number);
+      const latest = latestVersion.split('.').map(Number);
+      if (latest[0] > curr[0]) majorUpdate = true;
+    }
+    
+    // Find Linux assets (AppImage, .deb, .sig)
+    const allAssets = release.assets || [];
+    const linuxAssets = allAssets.filter((a: any) => 
+      a.name?.endsWith('.AppImage') || a.name?.endsWith('.deb') || 
+      a.name?.endsWith('.AppImage.tar.gz') || a.name?.endsWith('.sig')
     );
+    
+    // Find the primary download (AppImage preferred, then .deb)
+    const appimage = linuxAssets.find((a: any) => a.name?.endsWith('.AppImage'));
+    const deb = linuxAssets.find((a: any) => a.name?.endsWith('.deb'));
+    const primaryDownload = appimage || deb;
     
     res.json({
       updateAvailable,
       currentVersion: APP_VERSION,
       latestVersion,
+      majorUpdate,
       releaseName: release.name || `v${latestVersion}`,
       releaseNotes: release.body || '',
       releaseDate: release.published_at || '',
-      downloadUrl: release.html_url || '',
-      assets: assets.map((a: any) => ({
+      releaseUrl: release.html_url || '',
+      downloadUrl: primaryDownload?.browser_download_url || release.html_url || '',
+      assets: linuxAssets.map((a: any) => ({
         name: a.name,
         size: a.size,
         downloadUrl: a.browser_download_url,
@@ -212,15 +229,18 @@ const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: false,
 // WebSocket server (terminal)
 const terminalWss = new WebSocketServer({ server, path: '/ws/terminal', perMessageDeflate: false, maxPayload: 5 * 1024 * 1024 });
 
-wss.on('connection', (ws) => {
-  logger.info('websocket', 'Client connected');
-
-  // Set up orchestrator events
-  orchestrator.setEventCallback((event, data) => {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ event, data }));
+// Broadcast orchestrator events to ALL connected clients
+orchestrator.setEventCallback((event, data) => {
+  const message = JSON.stringify({ event, data });
+  wss.clients.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(message);
     }
   });
+});
+
+wss.on('connection', (ws) => {
+  logger.info('websocket', 'Client connected');
 
   ws.on('message', async (data) => {
     try {

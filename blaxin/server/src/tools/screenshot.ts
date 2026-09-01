@@ -1,7 +1,7 @@
 import { Tool, ToolResult } from '../types.js';
 import { exec } from 'child_process';
 import { promisify } from 'util';
-import { readFileSync, existsSync, unlinkSync, statSync } from 'fs';
+import { readFileSync, existsSync, unlinkSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -9,7 +9,7 @@ const execAsync = promisify(exec);
 
 export class ScreenshotTool implements Tool {
   name = 'screenshot';
-  description = 'Take a screenshot of the current screen or a specific window. Returns information about what is visible on screen.';
+  description = 'Take a screenshot of the current screen or a specific window. Returns the image as base64 data and a description of what is visible.';
 
   definition = {
     type: 'function' as const,
@@ -93,13 +93,26 @@ export class ScreenshotTool implements Tool {
 
       if (existsSync(screenshotPath)) {
         const stats = statSync(screenshotPath);
-        // Clean up the file after reading
+        const imageBuffer = readFileSync(screenshotPath);
+        const base64Data = imageBuffer.toString('base64');
+        
+        // Write the screenshot data as a file the frontend can display
+        const previewPath = join(tmpdir(), 'blaxin-latest-screenshot.png');
+        writeFileSync(previewPath, imageBuffer);
+        
+        // Clean up the original temp file
         unlinkSync(screenshotPath);
         
         return {
           success: true,
-          output: `Screenshot captured successfully (${stats.size} bytes). The screenshot was taken and processed.`,
-          data: { screenshotAvailable: true, size: stats.size },
+          output: `Screenshot captured successfully (${stats.size} bytes). Image data is available as base64 in the data field. The screenshot shows the current desktop state.`,
+          data: { 
+            screenshotAvailable: true, 
+            size: stats.size,
+            base64: base64Data,
+            mimeType: 'image/png',
+            previewPath,
+          },
         };
       }
 
