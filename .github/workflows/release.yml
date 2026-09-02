@@ -58,46 +58,26 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli
 
-      - name: Prepare signing key for Tauri updater
+      - name: Verify signing key format
         env:
           TAURI_SIGNING_PRIVATE_KEY_RAW: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
-          # Tauri needs either the raw key content or a file path to the key.
-          # GitHub Actions secrets may contain the raw minisign private key
-          # or a base64-encoded version. Handle both cases.
-          mkdir -p /tmp/signing
-
-          # First, try using the secret as-is (raw minisign key content)
-          echo "$TAURI_SIGNING_PRIVATE_KEY_RAW" > /tmp/signing/key.sec
-          chmod 600 /tmp/signing/key.sec
-          KEY_SIZE=$(wc -c < /tmp/signing/key.sec)
-          FIRST_LINE=$(head -1 /tmp/signing/key.sec)
-          echo "Key file size: ${KEY_SIZE} bytes"
-          echo "First line: ${FIRST_LINE}"
-
-          # Check if the first line looks like a valid minisign private key
-          if echo "$FIRST_LINE" | grep -q "untrusted comment"; then
-            echo "Key appears to be raw minisign format — using as-is"
-          else
-            # Try base64 decoding
-            echo "Key doesn't start with 'untrusted comment', trying base64 decode..."
-            DECODED=$(echo "$TAURI_SIGNING_PRIVATE_KEY_RAW" | base64 -d 2>/dev/null)
-            DECODED_FIRST=$(echo "$DECODED" | head -1)
-            if echo "$DECODED_FIRST" | grep -q "untrusted comment"; then
-              echo "Base64 decode successful — using decoded key"
-              echo "$DECODED" > /tmp/signing/key.sec
-              chmod 600 /tmp/signing/key.sec
-            else
-              echo "WARNING: Could not determine key format. Using raw content."
-              echo "If signing fails, the key may need to be regenerated."
-            fi
-          fi
-
-          FINAL_SIZE=$(wc -c < /tmp/signing/key.sec)
-          echo "Final key size: ${FINAL_SIZE} bytes"
-          if [ "$FINAL_SIZE" -lt 50 ]; then
-            echo "ERROR: Signing key is too small (${FINAL_SIZE} bytes)"
+          # Log the key format for debugging (never log the actual key!)
+          KEY_SIZE=${#TAURI_SIGNING_PRIVATE_KEY_RAW}
+          echo "Signing key env var length: ${KEY_SIZE} chars"
+          if [ "$KEY_SIZE" -lt 50 ]; then
+            echo "ERROR: Signing key seems too short (${KEY_SIZE} chars)"
             exit 1
+          fi
+          # Check if it looks like a minisign key (starts with 'untrusted comment')
+          if echo "$TAURI_SIGNING_PRIVATE_KEY_RAW" | head -1 | grep -q "untrusted comment"; then
+            echo "Key format: raw minisign private key"
+          else
+            echo "Key format: NOT raw minisign (may be base64-encoded or file path)"
+          fi
+          # Try base64 decoding to check
+          if echo "$TAURI_SIGNING_PRIVATE_KEY_RAW" | base64 -d 2>/dev/null | head -1 | grep -q "untrusted comment"; then
+            echo "Key can be base64-decoded to minisign format"
           fi
 
       - name: Download and bundle Node.js runtime
@@ -204,19 +184,14 @@ jobs:
       - name: Build Tauri app (AppImage + deb) with updater signing
         working-directory: blaxin
         env:
-          # Pass the file PATH to the signing key — Tauri accepts a path or raw key content.
-          # Tauri will automatically sign the AppImage and produce .sig
-          # when createUpdaterArtifacts is true in tauri.conf.json.
-          TAURI_SIGNING_PRIVATE_KEY: /tmp/signing/key.sec
+          # Pass the signing key content directly to Tauri.
+          # Tauri accepts either a file path or the raw key content.
+          # When createUpdaterArtifacts is true, Tauri signs the AppImage
+          # and produces .sig files automatically.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           export PATH="${HOME}/.cargo/bin:$PATH"
-
-          echo "=== Verifying signing key ==="
-          echo "Key file: /tmp/signing/key.sec"
-          echo "Key exists: $(test -f /tmp/signing/key.sec && echo yes || echo no)"
-          echo "Key size: $(wc -c < /tmp/signing/key.sec) bytes"
-          echo "First line: $(head -1 /tmp/signing/key.sec)"
 
           echo "=== Building Tauri app ==="
           cd src-tauri
@@ -248,6 +223,9 @@ jobs:
               # List all .sig files in the entire target directory for debugging
               echo "  All .sig files in target:"
               find src-tauri/target -name "*.sig" 2>/dev/null || echo "    (none)"
+              # List the bundle directory tree for debugging
+              echo "  Bundle directory tree:"
+              find src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/ -maxdepth 2 -type f 2>/dev/null | head -20
             fi
           else
             echo "ERROR: Bundle directory not found!"
