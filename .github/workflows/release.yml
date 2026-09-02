@@ -60,9 +60,7 @@ jobs:
 
       - name: Install minisign for update signing
         run: |
-          curl -fsSL -o /tmp/minisign.tar.gz https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-linux.tar.gz
-          tar xzf /tmp/minisign.tar.gz -C /tmp
-          sudo cp /tmp/minisign /usr/local/bin/minisign
+          sudo apt-get install -y minisign
           minisign --version
 
       - name: Download and bundle Node.js runtime
@@ -193,23 +191,16 @@ jobs:
           fi
           echo "Found AppImage: $APPIMAGE"
 
-          # Tauri's TAURI_SIGNING_PRIVATE_KEY is in base64-encoded minisign format
-          # We need to decode it to a raw minisign private key file
           mkdir -p /tmp/signing
 
-          # Write the private key (it contains the full minisign format content)
-          echo "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/signing/key.sec
+          # Tauri's TAURI_SIGNING_PRIVATE_KEY is base64-encoded minisign key content
+          # Decode it to get the raw minisign private key file format
+          echo "$TAURI_SIGNING_PRIVATE_KEY" | base64 -d > /tmp/signing/key.sec
+          echo "Key file size: $(wc -c < /tmp/signing/key.sec) bytes"
+          head -1 /tmp/signing/key.sec
 
-          # Sign the AppImage — minisign uses password from env
-          # The key file is already in minisign format (base64 encoded with comment lines)
-          echo "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" | minisign -Sm "$APPIMAGE" -s /tmp/signing/key.sec -x "${APPIMAGE}.sig" -t "BLAXIN v${{ steps.version.outputs.version_num }} update" 2>&1 || {
-            echo "minisign signing failed, trying alternative approach..."
-
-            # Alternative: decode the base64 key and use it directly
-            DECODED_KEY=$(echo "$TAURI_SIGNING_PRIVATE_KEY" | base64 -d 2>/dev/null || echo "$TAURI_SIGNING_PRIVATE_KEY")
-            echo "$DECODED_KEY" > /tmp/signing/key.decoded.sec
-            echo "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" | minisign -Sm "$APPIMAGE" -s /tmp/signing/key.decoded.sec -x "${APPIMAGE}.sig" -t "BLAXIN v${{ steps.version.outputs.version_num }} update" 2>&1
-          }
+          # Sign the AppImage using minisign
+          echo "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" | minisign -Sm "$APPIMAGE" -s /tmp/signing/key.sec -x "${APPIMAGE}.sig" -t "BLAXIN v${{ steps.version.outputs.version_num }} update" 2>&1
 
           if [ -f "${APPIMAGE}.sig" ]; then
             echo "✓ AppImage signed successfully"
