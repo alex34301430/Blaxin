@@ -57,7 +57,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
-        "https://api.github.com/repos/alex34301430/Blaxin/releases/latest"
+        "https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/update/latest.json"
       ],
       "pubkey": "RWQdUBByv6OCkX7XeAjzYn7TDuHL4w3tgbhr0Nm04ed0NQBPPphW2N2C",
       "windows": {

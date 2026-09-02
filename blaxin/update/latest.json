@@ -1,0 +1,11 @@
+{
+  "version": "1.0.0",
+  "notes": "Initial stable release of BLAXIN — Personal AI Desktop Agent for Linux.",
+  "pub_date": "2026-09-01T00:00:00Z",
+  "platforms": {
+    "linux-x86_64": {
+      "signature": "",
+      "url": "https://github.com/alex34301430/Blaxin/releases/download/v1.0.0/BLAXIN_1.0.0_x86_64.tar.gz"
+    }
+  }
+}

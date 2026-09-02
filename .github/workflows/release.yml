@@ -15,11 +15,12 @@ permissions:
 
 env:
   NODE_VERSION: '20'
+  NODE_BUNDLE_VERSION: '20.18.0'
 
 jobs:
   build-linux:
     runs-on: ubuntu-22.04
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -51,10 +52,27 @@ jobs:
             librsvg2-dev \
             libgtk-3-dev \
             libsoup-3.0-dev \
-            libjavascriptcoregtk-4.1-dev
+            libjavascriptcoregtk-4.1-dev \
+            imagemagick
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli
+
+      - name: Download and bundle Node.js runtime
+        run: |
+          echo "Downloading Node.js v${NODE_BUNDLE_VERSION} for Linux x86_64..."
+          NODE_URL="https://nodejs.org/dist/v${NODE_BUNDLE_VERSION}/node-v${NODE_BUNDLE_VERSION}-linux-x64.tar.xz"
+
+          cd blaxin/resources
+          rm -rf node
+          mkdir -p node
+
+          curl -fsSL "${NODE_URL}" | tar xJ --strip-components=1 -C node
+
+          # Verify the binary exists and works
+          node/bin/node --version
+          echo "Node.js bundled successfully"
+          ls -la node/bin/node
 
       - name: Install server dependencies
         working-directory: blaxin/server
@@ -87,39 +105,55 @@ jobs:
         run: |
           if [ "${{ github.ref_type }}" = "tag" ]; then
             echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+            echo "version_num=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
           else
             echo "version=${{ github.event.inputs.version }}" >> $GITHUB_OUTPUT
+            echo "version_num=$(echo ${{ github.event.inputs.version }} | sed 's/^v//')" >> $GITHUB_OUTPUT
           fi
 
-      - name: Update version in package.json files
+      - name: Update version across all components
         working-directory: blaxin
         run: |
-          VERSION="${{ steps.version.outputs.version }}"
-          VERSION_NUM="${VERSION#v}"
-          echo "Setting version to $VERSION_NUM"
-          
+          VERSION="${{ steps.version.outputs.version_num }}"
+          echo "Setting version to $VERSION across all components"
+
           # Update server version
           cd server
-          npm version "$VERSION_NUM" --no-git-tag-version --allow-same-version 2>/dev/null || true
+          npm version "$VERSION" --no-git-tag-version --allow-same-version 2>/dev/null || true
           cd ..
-          
+
           # Update client version
           cd client
-          npm version "$VERSION_NUM" --no-git-tag-version --allow-same-version 2>/dev/null || true
+          npm version "$VERSION" --no-git-tag-version --allow-same-version 2>/dev/null || true
           cd ..
-          
+
           # Update Tauri version
           cd src-tauri
-          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION_NUM\"/" tauri.conf.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" tauri.conf.json
           cd ..
+
+          # Update Cargo.toml version
+          cd src-tauri
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+          cd ..
+
+          # Update server version constant
+          cd server/src/utils
+          if [ -f version.ts ]; then
+            sed -i "s/export const APP_VERSION = '.*'/export const APP_VERSION = '$VERSION'/" version.ts
+          fi
+          cd ../../..
+
+          echo "All versions updated to $VERSION"
 
       - name: Convert icons to 8-bit RGBA
         working-directory: blaxin/src-tauri/icons
         run: |
-          sudo apt-get install -y imagemagick
           for f in *.png; do
-            convert "$f" -depth 8 PNG32:"$f.tmp" && mv "$f.tmp" "$f"
-            echo "Converted $f to 8-bit RGBA"
+            if [ -f "$f" ]; then
+              convert "$f" -depth 8 PNG32:"$f.tmp" && mv "$f.tmp" "$f"
+              echo "Converted $f to 8-bit RGBA"
+            fi
           done
 
       - name: Build Tauri app (AppImage + deb)
@@ -130,28 +164,50 @@ jobs:
         run: |
           export PATH="${HOME}/.cargo/bin:$PATH"
           cd src-tauri
-          cargo tauri build --target x86_64-unknown-linux-gnu --bundles appimage,deb
+          cargo tauri build --target x86_64-unknown-linux-gnu --bundles appimage,deb 2>&1
           cd ..
 
-      - name: Find build artifacts
+      - name: Find and organize build artifacts
         id: artifacts
         run: |
           echo "Looking for build artifacts..."
-          find blaxin/src-tauri/target -name "*.AppImage" -o -name "*.deb" -o -name "*.AppImage.tar.gz" -o -name "*.AppImage.tar.gz.sig" 2>/dev/null
-          
           mkdir -p artifacts
-          
-          # Copy AppImage
-          find blaxin/src-tauri/target -name "*.AppImage" -exec cp {} artifacts/ \;
-          
-          # Copy .deb
-          find blaxin/src-tauri/target -name "*.deb" -exec cp {} artifacts/ \;
-          
-          # Copy update signatures
-          find blaxin/src-tauri/target -name "*.sig" -exec cp {} artifacts/ \;
-          find blaxin/src-tauri/target -name "*.tar.gz" -exec cp {} artifacts/ \;
-          
-          echo "=== Artifacts ==="
+
+          # Find and copy AppImage
+          APPIMAGE=$(find blaxin/src-tauri/target -name "*.AppImage" | head -1)
+          if [ -n "$APPIMAGE" ]; then
+            cp "$APPIMAGE" artifacts/
+            echo "Found AppImage: $(basename $APPIMAGE)"
+          else
+            echo "ERROR: No AppImage found!"
+            find blaxin/src-tauri/target -name "*.AppImage*" -o -name "*.appimage*" 2>/dev/null
+            exit 1
+          fi
+
+          # Find and copy .deb
+          DEB=$(find blaxin/src-tauri/target -name "*.deb" | head -1)
+          if [ -n "$DEB" ]; then
+            cp "$DEB" artifacts/
+            echo "Found .deb: $(basename $DEB)"
+          fi
+
+          # Find and copy update archive and signature
+          TAR_GZ=$(find blaxin/src-tauri/target -name "*.tar.gz" -not -name "*.AppImage.tar.gz" | head -1)
+          if [ -z "$TAR_GZ" ]; then
+            TAR_GZ=$(find blaxin/src-tauri/target -name "*.AppImage.tar.gz" | head -1)
+          fi
+          if [ -n "$TAR_GZ" ]; then
+            cp "$TAR_GZ" artifacts/
+            echo "Found update archive: $(basename $TAR_GZ)"
+          fi
+
+          SIG=$(find blaxin/src-tauri/target -name "*.sig" | head -1)
+          if [ -n "$SIG" ]; then
+            cp "$SIG" artifacts/
+            echo "Found signature: $(basename $SIG)"
+          fi
+
+          echo "=== All artifacts ==="
           ls -la artifacts/
 
       - name: Generate checksums
@@ -160,11 +216,46 @@ jobs:
           for f in *.AppImage *.deb *.tar.gz; do
             if [ -f "$f" ]; then
               sha256sum "$f" > "$f.sha256"
-              echo "Generated checksum for $f"
+              echo "Checksum: $(cat $f.sha256)"
             fi
           done
-          echo "=== Checksums ==="
-          cat *.sha256 2>/dev/null || echo "No checksums generated"
+
+      - name: Generate update manifest (latest.json)
+        id: manifest
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          VERSION_NUM="${{ steps.version.outputs.version_num }}"
+
+          # Find the update archive
+          TAR_FILE=$(ls artifacts/*.tar.gz 2>/dev/null | head -1)
+          SIG_FILE=$(ls artifacts/*.sig 2>/dev/null | head -1)
+
+          # Read signature content
+          SIG_CONTENT=""
+          if [ -n "$SIG_FILE" ] && [ -f "$SIG_FILE" ]; then
+            SIG_CONTENT=$(cat "$SIG_FILE")
+          fi
+
+          # Get download URL for the update archive
+          DOWNLOAD_URL="https://github.com/alex34301430/Blaxin/releases/download/${VERSION}/$(basename ${TAR_FILE})"
+
+          # Generate latest.json
+          cat > artifacts/latest.json << EOF
+          {
+            "version": "${VERSION_NUM}",
+            "notes": "BLAXIN ${VERSION} — See https://github.com/alex34301430/Blaxin/releases/tag/${VERSION} for details.",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "linux-x86_64": {
+                "signature": "${SIG_CONTENT}",
+                "url": "${DOWNLOAD_URL}"
+              }
+            }
+          }
+          EOF
+
+          echo "Generated update manifest:"
+          cat artifacts/latest.json
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -176,13 +267,14 @@ jobs:
             artifacts/*.sha256
             artifacts/*.sig
             artifacts/*.tar.gz
+            artifacts/latest.json
           retention-days: 30
 
   release:
     needs: build-linux
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -196,48 +288,108 @@ jobs:
       - name: List artifacts
         run: ls -la artifacts/
 
-      - name: Generate release notes
-        id: notes
+      - name: Read version from manifest
+        id: manifest
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
           VERSION_NUM="${VERSION#v}"
-          cat > release_notes.md << EOF
-          # BLAXIN ${VERSION}
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "version_num=${VERSION_NUM}" >> $GITHUB_OUTPUT
+          echo "Release version: ${VERSION}"
 
-          ## Downloads
+      - name: Rename artifacts for consistency
+        run: |
+          VERSION="${{ steps.manifest.outputs.version_num }}"
+          cd artifacts
 
-          | File | Description |
-          |------|-------------|
-          | \`BLAXIN_${VERSION_NUM}_amd64.AppImage\` | Portable Linux app (no install needed) |
-          | \`BLAXIN_${VERSION_NUM}_amd64.deb\` | Debian/Ubuntu package |
+          # Rename AppImage with version in name
+          for f in *.AppImage; do
+            if [ -f "$f" ]; then
+              NEW_NAME="BLAXIN_${VERSION}_amd64.AppImage"
+              mv "$f" "$NEW_NAME"
+              echo "Renamed: $f -> $NEW_NAME"
+              # Update checksum
+              if [ -f "${f}.sha256" ]; then
+                sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256"
+                rm -f "${f}.sha256"
+              fi
+            fi
+          done
 
-          ## Quick Install
+          # Rename .deb
+          for f in *.deb; do
+            if [ -f "$f" ]; then
+              NEW_NAME="blaxin_${VERSION}_amd64.deb"
+              mv "$f" "$NEW_NAME"
+              echo "Renamed: $f -> $NEW_NAME"
+              if [ -f "${f}.sha256" ]; then
+                sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256"
+                rm -f "${f}.sha256"
+              fi
+            fi
+          done
 
-          ### One-line installer
-          \`\`\`bash
-          curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/install.sh | bash
-          \`\`\`
+          # Rename tar.gz
+          for f in *.tar.gz; do
+            if [ -f "$f" ]; then
+              NEW_NAME="BLAXIN_${VERSION}_x86_64.tar.gz"
+              mv "$f" "$NEW_NAME"
+              echo "Renamed: $f -> $NEW_NAME"
+              if [ -f "${f}.sha256" ]; then
+                sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256"
+                rm -f "${f}.sha256"
+              fi
+            fi
+          done
 
-          ### AppImage
-          \`\`\`bash
-          chmod +x BLAXIN_*.AppImage
-          ./BLAXIN_*.AppImage
-          \`\`\`
+          # Rename sig
+          for f in *.sig; do
+            if [ -f "$f" ]; then
+              NEW_NAME="BLAXIN_${VERSION}_x86_64.tar.gz.sig"
+              mv "$f" "$NEW_NAME"
+              echo "Renamed: $f -> $NEW_NAME"
+            fi
+          done
 
-          ### .deb package
-          \`\`\`bash
-          sudo dpkg -i BLAXIN_*.deb
-          sudo apt-get install -f  # Fix any missing dependencies
-          \`\`\`
+          echo "=== Final artifacts ==="
+          ls -la
 
-          ## What's Changed
-          See commit history for details.
-          EOF
+      - name: Update latest.json manifest in repo
+        run: |
+          # Copy the generated manifest to the repo
+          cp artifacts/latest.json blaxin/update/latest.json
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: release_notes.md
+          name: "BLAXIN ${{ steps.manifest.outputs.version }}"
+          body: |
+            ## BLAXIN ${{ steps.manifest.outputs.version }}
+
+            ### Quick Install
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/install.sh | bash
+            ```
+
+            ### Downloads
+
+            | File | Description |
+            |------|-------------|
+            | `BLAXIN_${{ steps.manifest.outputs.version_num }}_amd64.AppImage` | Portable Linux app (no install needed) |
+            | `blaxin_${{ steps.manifest.outputs.version_num }}_amd64.deb` | Debian/Ubuntu package |
+            | `BLAXIN_${{ steps.manifest.outputs.version_num }}_x86_64.tar.gz` | Update archive (for auto-updater) |
+
+            ### AppImage
+            ```bash
+            chmod +x BLAXIN_*.AppImage
+            ./BLAXIN_*.AppImage
+            ```
+
+            ### .deb package
+            ```bash
+            sudo dpkg -i blaxin_*.deb
+            sudo apt-get install -f
+            ```
           draft: false
           prerelease: false
           files: |
@@ -246,5 +398,14 @@ jobs:
             artifacts/*.sha256
             artifacts/*.sig
             artifacts/*.tar.gz
+            artifacts/latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Commit update manifest back to repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add blaxin/update/latest.json
+          git commit -m "chore: update latest.json for ${{ steps.manifest.outputs.version }}" || echo "No changes to commit"
+          git push || echo "Could not push update manifest (non-critical)"
