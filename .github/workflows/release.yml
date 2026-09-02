@@ -215,7 +215,7 @@ jobs:
 
           ### One-line installer
           \`\`\`bash
-          curl -fsSL https://raw.githubusercontent.com/alex3430/Blaxin/main/install.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/install.sh | bash
           \`\`\`
 
           ### AppImage

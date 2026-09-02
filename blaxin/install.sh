@@ -3,8 +3,8 @@
 # BLAXIN — Secure One-Command Installer for Linux
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/alex3430/Blaxin/main/install.sh | bash
-#   wget -qO- https://raw.githubusercontent.com/alex3430/Blaxin/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/install.sh | bash
+#   wget -qO- https://raw.githubusercontent.com/alex34301430/Blaxin/main/install.sh | bash
 #
 # What it does:
 #   1. Detects Linux architecture
@@ -29,7 +29,7 @@
 set -euo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────
-REPO="alex3430/Blaxin"
+REPO="alex34301430/Blaxin"
 INSTALL_DIR="/opt/blaxin"
 BIN_DIR="/usr/local/bin"
 DESKTOP_DIR="/usr/share/applications"
