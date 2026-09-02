@@ -31,3 +31,7 @@ Thumbs.db
 
 # Secrets (NEVER commit)
 blaxin/.secrets/
+
+# Session state (runtime data)
+blaxin/server/.blaxin-state/
+blaxin/.blaxin-state/

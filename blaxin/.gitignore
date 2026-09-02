@@ -12,6 +12,9 @@ src-tauri/gen/
 # Credentials and secrets (NEVER commit)
 .blaxin-credentials
 blaxin-config.json
+
+# Session state (runtime data)
+.blaxin-state/
 *.env
 .env
 .secrets/
