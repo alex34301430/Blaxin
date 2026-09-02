@@ -58,6 +58,13 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli
 
+      - name: Install minisign for update signing
+        run: |
+          curl -fsSL -o /tmp/minisign.tar.gz https://github.com/jedisct1/minisign/releases/download/0.11/minisign-0.11-linux.tar.gz
+          tar xzf /tmp/minisign.tar.gz -C /tmp
+          sudo cp /tmp/minisign /usr/local/bin/minisign
+          minisign --version
+
       - name: Download and bundle Node.js runtime
         run: |
           echo "Downloading Node.js v${NODE_BUNDLE_VERSION} for Linux x86_64..."
@@ -170,51 +177,84 @@ jobs:
           cargo tauri build --target x86_64-unknown-linux-gnu --bundles appimage,deb 2>&1
           cd ..
 
+      - name: Sign AppImage for auto-updates
+        working-directory: blaxin
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          echo "Signing AppImage for auto-updater..."
+
+          # Find the AppImage
+          APPIMAGE=$(find src-tauri/target -name "*.AppImage" | head -1)
+          if [ -z "$APPIMAGE" ]; then
+            echo "ERROR: No AppImage found to sign!"
+            exit 1
+          fi
+          echo "Found AppImage: $APPIMAGE"
+
+          # Tauri's TAURI_SIGNING_PRIVATE_KEY is in base64-encoded minisign format
+          # We need to decode it to a raw minisign private key file
+          mkdir -p /tmp/signing
+
+          # Write the private key (it contains the full minisign format content)
+          echo "$TAURI_SIGNING_PRIVATE_KEY" > /tmp/signing/key.sec
+
+          # Sign the AppImage — minisign uses password from env
+          # The key file is already in minisign format (base64 encoded with comment lines)
+          echo "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" | minisign -Sm "$APPIMAGE" -s /tmp/signing/key.sec -x "${APPIMAGE}.sig" -t "BLAXIN v${{ steps.version.outputs.version_num }} update" 2>&1 || {
+            echo "minisign signing failed, trying alternative approach..."
+
+            # Alternative: decode the base64 key and use it directly
+            DECODED_KEY=$(echo "$TAURI_SIGNING_PRIVATE_KEY" | base64 -d 2>/dev/null || echo "$TAURI_SIGNING_PRIVATE_KEY")
+            echo "$DECODED_KEY" > /tmp/signing/key.decoded.sec
+            echo "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" | minisign -Sm "$APPIMAGE" -s /tmp/signing/key.decoded.sec -x "${APPIMAGE}.sig" -t "BLAXIN v${{ steps.version.outputs.version_num }} update" 2>&1
+          }
+
+          if [ -f "${APPIMAGE}.sig" ]; then
+            echo "✓ AppImage signed successfully"
+            echo "Signature file: ${APPIMAGE}.sig"
+            echo "Signature size: $(wc -c < "${APPIMAGE}.sig") bytes"
+            head -3 "${APPIMAGE}.sig"
+          else
+            echo "ERROR: Signature file was not created!"
+            exit 1
+          fi
+
       - name: Find and organize build artifacts
         id: artifacts
         run: |
           echo "Looking for build artifacts..."
           mkdir -p artifacts
 
+          VERSION="${{ steps.version.outputs.version_num }}"
+
           # Find and copy AppImage
           APPIMAGE=$(find blaxin/src-tauri/target -name "*.AppImage" | head -1)
           if [ -n "$APPIMAGE" ]; then
-            cp "$APPIMAGE" artifacts/
-            echo "Found AppImage: $(basename $APPIMAGE)"
+            cp "$APPIMAGE" artifacts/BLAXIN_${VERSION}_amd64.AppImage
+            echo "Found AppImage: $(basename $APPIMAGE) -> BLAXIN_${VERSION}_amd64.AppImage"
           else
             echo "ERROR: No AppImage found!"
-            find blaxin/src-tauri/target -name "*.AppImage*" -o -name "*.appimage*" 2>/dev/null
+            exit 1
+          fi
+
+          # Copy AppImage signature (produced by our signing step)
+          APPIMAGE_SIG="${APPIMAGE}.sig"
+          if [ -f "$APPIMAGE_SIG" ]; then
+            cp "$APPIMAGE_SIG" artifacts/BLAXIN_${VERSION}_amd64.AppImage.sig
+            echo "Found AppImage signature: $(basename $APPIMAGE_SIG)"
+          else
+            echo "ERROR: No AppImage signature found! Auto-updates cannot work without it."
+            ls -la blaxin/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/
             exit 1
           fi
 
           # Find and copy .deb
           DEB=$(find blaxin/src-tauri/target -name "*.deb" | head -1)
           if [ -n "$DEB" ]; then
-            cp "$DEB" artifacts/
-            echo "Found .deb: $(basename $DEB)"
-          fi
-
-          # Find and copy the Tauri update archive (NOT control.tar.gz from .deb)
-          # Tauri produces update archives named like <appname>_<version>_x86_64.tar.gz
-          TAR_GZ=$(find blaxin/src-tauri/target -name "blaxin_*_x86_64.tar.gz" -not -name "*.AppImage.tar.gz" | head -1)
-          if [ -z "$TAR_GZ" ]; then
-            TAR_GZ=$(find blaxin/src-tauri/target -name "*.tar.gz" -not -name "control.tar.gz" -not -name "*.AppImage.tar.gz" | head -1)
-          fi
-          if [ -n "$TAR_GZ" ]; then
-            cp "$TAR_GZ" artifacts/
-            echo "Found update archive: $(basename $TAR_GZ)"
-          else
-            echo "WARNING: No update archive found (auto-updates will not work)"
-          fi
-
-          # Find and copy signature (only produced if TAURI_SIGNING_PRIVATE_KEY is set)
-          SIG=$(find blaxin/src-tauri/target -name "*.sig" | head -1)
-          if [ -n "$SIG" ]; then
-            cp "$SIG" artifacts/
-            echo "Found signature: $(basename $SIG)"
-          else
-            echo "WARNING: No signature file found. Auto-update verification will not work."
-            echo "Make sure TAURI_SIGNING_PRIVATE_KEY is set in repository secrets."
+            cp "$DEB" artifacts/blaxin_${VERSION}_amd64.deb
+            echo "Found .deb: $(basename $DEB) -> blaxin_${VERSION}_amd64.deb"
           fi
 
           echo "=== All artifacts ==="
@@ -229,13 +269,6 @@ jobs:
               echo "Checksum: $(cat $f.sha256)"
             fi
           done
-          # Checksum for update archive (if it exists)
-          for f in BLAXIN_*.tar.gz; do
-            if [ -f "$f" ]; then
-              sha256sum "$f" > "$f.sha256"
-              echo "Checksum: $(cat $f.sha256)"
-            fi
-          done
 
       - name: Generate update manifest (latest.json)
         id: manifest
@@ -243,51 +276,22 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           VERSION_NUM="${{ steps.version.outputs.version_num }}"
 
-          # Find the Tauri update archive (NOT control.tar.gz)
-          # Must match the naming pattern: BLAXIN_<version>_x86_64.tar.gz or blaxin_<version>_x86_64.tar.gz
-          TAR_FILE=""
-          for candidate in artifacts/BLAXIN_*_x86_64.tar.gz artifacts/blaxin_*_x86_64.tar.gz; do
-            if [ -f "$candidate" ]; then
-              TAR_FILE="$candidate"
-              break
-            fi
-          done
+          # For Tauri v2 Linux AppImage updates, the update artifact IS the AppImage
+          # The download URL points directly to the AppImage in the release
+          DOWNLOAD_URL="https://github.com/alex34301430/Blaxin/releases/download/${VERSION}/BLAXIN_${VERSION_NUM}_amd64.AppImage"
 
-          # Fallback: any tar.gz that is NOT control.tar.gz
-          if [ -z "$TAR_FILE" ]; then
-            for candidate in artifacts/*.tar.gz; do
-              if [ -f "$candidate" ] && [[ "$(basename $candidate)" != control.tar.gz ]]; then
-                TAR_FILE="$candidate"
-                break
-              fi
-            done
-          fi
-
-          if [ -z "$TAR_FILE" ]; then
-            echo "ERROR: No update archive found! Cannot generate latest.json."
-            echo "Available files:"
-            ls -la artifacts/
+          # Read the AppImage signature content
+          SIG_FILE="artifacts/BLAXIN_${VERSION_NUM}_amd64.AppImage.sig"
+          SIG_CONTENT=""
+          if [ -f "$SIG_FILE" ]; then
+            SIG_CONTENT=$(cat "$SIG_FILE")
+            echo "AppImage signature found and included (${#SIG_CONTENT} chars)"
+          else
+            echo "ERROR: No signature file found!"
             exit 1
           fi
 
-          echo "Using update archive: $TAR_FILE"
-
-          # Find signature file
-          SIG_FILE=$(ls artifacts/*.sig 2>/dev/null | head -1)
-
-          # Read signature content
-          SIG_CONTENT=""
-          if [ -n "$SIG_FILE" ] && [ -f "$SIG_FILE" ]; then
-            SIG_CONTENT=$(cat "$SIG_FILE")
-            echo "Signature found and included"
-          else
-            echo "WARNING: No signature file found. Update verification will rely on HTTPS only."
-          fi
-
-          # Get download URL for the update archive
-          DOWNLOAD_URL="https://github.com/alex34301430/Blaxin/releases/download/${VERSION}/$(basename ${TAR_FILE})"
-
-          # Generate latest.json
+          # Generate latest.json for Tauri updater
           cat > artifacts/latest.json << EOF
           {
             "version": "${VERSION_NUM}",
@@ -311,10 +315,9 @@ jobs:
           name: blaxin-linux-x86_64
           path: |
             artifacts/*.AppImage
+            artifacts/*.AppImage.sig
             artifacts/*.deb
             artifacts/*.sha256
-            artifacts/*.sig
-            artifacts/*.tar.gz
             artifacts/latest.json
           retention-days: 30
 
@@ -345,86 +348,62 @@ jobs:
           echo "version_num=${VERSION_NUM}" >> $GITHUB_OUTPUT
           echo "Release version: ${VERSION}"
 
-      - name: Rename artifacts for consistency
+      - name: Verify release artifacts
         run: |
+          echo "=== Release Artifact Verification ==="
           VERSION="${{ steps.manifest.outputs.version_num }}"
-          cd artifacts
 
-          echo "=== Files in artifacts/ ==="
-          ls -la
+          # Check AppImage exists and is valid
+          if [ ! -f "artifacts/BLAXIN_${VERSION}_amd64.AppImage" ]; then
+            echo "ERROR: AppImage not found!"
+            exit 1
+          fi
+          APPIMAGE_SIZE=$(stat -c%s "artifacts/BLAXIN_${VERSION}_amd64.AppImage")
+          echo "✓ AppImage: $(( APPIMAGE_SIZE / 1024 / 1024 ))MB"
 
-          # Remove any stale or unwanted artifacts (control.tar.gz from .deb build)
-          rm -f control.tar.gz control.tar.gz.sha256 2>/dev/null || true
+          # Check signature exists and is non-empty
+          if [ ! -f "artifacts/BLAXIN_${VERSION}_amd64.AppImage.sig" ]; then
+            echo "ERROR: AppImage signature not found!"
+            exit 1
+          fi
+          SIG_SIZE=$(stat -c%s "artifacts/BLAXIN_${VERSION}_amd64.AppImage.sig")
+          if [ "$SIG_SIZE" -lt 100 ]; then
+            echo "ERROR: AppImage signature is too small ($SIG_SIZE bytes) - likely empty/invalid"
+            exit 1
+          fi
+          echo "✓ AppImage signature: ${SIG_SIZE} bytes"
 
-          # Rename AppImage
-          for f in *.AppImage; do
-            if [ -f "$f" ]; then
-              NEW_NAME="BLAXIN_${VERSION}_amd64.AppImage"
-              if [ "$f" != "$NEW_NAME" ]; then
-                mv "$f" "$NEW_NAME"
-                echo "Renamed: $f -> $NEW_NAME"
-              fi
-            fi
-          done
+          # Check .deb exists
+          if [ ! -f "artifacts/blaxin_${VERSION}_amd64.deb" ]; then
+            echo "ERROR: .deb not found!"
+            exit 1
+          fi
+          echo "✓ .deb: $(stat -c%s artifacts/blaxin_${VERSION}_amd64.deb | numfmt --to=iec-i)"
 
-          # Remove old AppImage checksums and regenerate
-          rm -f *.AppImage.sha256 2>/dev/null || true
-          if [ -f "BLAXIN_${VERSION}_amd64.AppImage" ]; then
-            sha256sum "BLAXIN_${VERSION}_amd64.AppImage" > "BLAXIN_${VERSION}_amd64.AppImage.sha256"
+          # Check latest.json exists and has correct URL
+          if [ ! -f "artifacts/latest.json" ]; then
+            echo "ERROR: latest.json not found!"
+            exit 1
+          fi
+          if grep -q "BLAXIN_${VERSION}_amd64.AppImage" artifacts/latest.json; then
+            echo "✓ latest.json points to correct AppImage URL"
+          else
+            echo "ERROR: latest.json does not point to correct AppImage URL!"
+            cat artifacts/latest.json
+            exit 1
           fi
 
-          # Rename .deb
-          for f in *.deb; do
-            if [ -f "$f" ]; then
-              NEW_NAME="blaxin_${VERSION}_amd64.deb"
-              if [ "$f" != "$NEW_NAME" ]; then
-                mv "$f" "$NEW_NAME"
-                echo "Renamed: $f -> $NEW_NAME"
-              fi
-            fi
-          done
-
-          # Remove old deb checksums and regenerate
-          rm -f *.deb.sha256 2>/dev/null || true
-          if [ -f "blaxin_${VERSION}_amd64.deb" ]; then
-            sha256sum "blaxin_${VERSION}_amd64.deb" > "blaxin_${VERSION}_amd64.deb.sha256"
+          # Check signature is in latest.json
+          SIG_IN_JSON=$(cat artifacts/latest.json | python3 -c "import sys,json; print(json.load(sys.stdin)['platforms']['linux-x86_64']['signature'])" 2>/dev/null)
+          if [ -n "$SIG_IN_JSON" ] && [ "$SIG_IN_JSON" != "" ]; then
+            echo "✓ latest.json has non-empty signature (${#SIG_IN_JSON} chars)"
+          else
+            echo "ERROR: latest.json has empty signature!"
+            exit 1
           fi
 
-          # Rename tar.gz (the Tauri update archive only)
-          for f in BLAXIN_*.tar.gz blaxin_*.tar.gz; do
-            if [ -f "$f" ]; then
-              NEW_NAME="BLAXIN_${VERSION}_x86_64.tar.gz"
-              if [ "$f" != "$NEW_NAME" ]; then
-                mv "$f" "$NEW_NAME"
-                echo "Renamed: $f -> $NEW_NAME"
-              fi
-            fi
-          done
-
-          # Remove old tar.gz checksums and regenerate
-          rm -f *.tar.gz.sha256 2>/dev/null || true
-          if [ -f "BLAXIN_${VERSION}_x86_64.tar.gz" ]; then
-            sha256sum "BLAXIN_${VERSION}_x86_64.tar.gz" > "BLAXIN_${VERSION}_x86_64.tar.gz.sha256"
-          fi
-
-          # Rename sig
-          for f in *.sig; do
-            if [ -f "$f" ]; then
-              NEW_NAME="BLAXIN_${VERSION}_x86_64.tar.gz.sig"
-              if [ "$f" != "$NEW_NAME" ]; then
-                mv "$f" "$NEW_NAME"
-                echo "Renamed: $f -> $NEW_NAME"
-              fi
-            fi
-          done
-
-          echo "=== Final artifacts ==="
-          ls -la
-
-      - name: Update latest.json manifest in repo
-        run: |
-          # Copy the generated manifest to the repo
-          cp artifacts/latest.json blaxin/update/latest.json
+          echo ""
+          echo "=== All verification checks passed ==="
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -444,7 +423,6 @@ jobs:
             |------|-------------|
             | `BLAXIN_${{ steps.manifest.outputs.version_num }}_amd64.AppImage` | Portable Linux app (no install needed) |
             | `blaxin_${{ steps.manifest.outputs.version_num }}_amd64.deb` | Debian/Ubuntu package |
-            | `BLAXIN_${{ steps.manifest.outputs.version_num }}_x86_64.tar.gz` | Update archive (for auto-updater) |
 
             ### AppImage
             ```bash
@@ -461,10 +439,9 @@ jobs:
           prerelease: false
           files: |
             artifacts/*.AppImage
+            artifacts/*.AppImage.sig
             artifacts/*.deb
             artifacts/*.sha256
-            artifacts/*.sig
-            artifacts/*.tar.gz
             artifacts/latest.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -473,6 +450,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          cp artifacts/latest.json blaxin/update/latest.json
           git add blaxin/update/latest.json
           git commit -m "chore: update latest.json for ${{ steps.manifest.outputs.version }}" || echo "No changes to commit"
           git push || echo "Could not push update manifest (non-critical)"
