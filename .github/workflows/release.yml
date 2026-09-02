@@ -64,6 +64,16 @@ jobs:
         working-directory: blaxin/server
         run: npm run build
 
+      - name: Prepare bundled server resources
+        run: |
+          rm -rf blaxin/resources/blaxin-server
+          mkdir -p blaxin/resources/blaxin-server/dist
+          cp -r blaxin/server/dist/* blaxin/resources/blaxin-server/dist/
+          cp blaxin/server/package.json blaxin/resources/blaxin-server/
+          cd blaxin/resources/blaxin-server
+          npm install --omit=dev
+          echo "Bundled server resources prepared"
+
       - name: Install client dependencies
         working-directory: blaxin/client
         run: npm ci
@@ -103,13 +113,13 @@ jobs:
           sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION_NUM\"/" tauri.conf.json
           cd ..
 
-      - name: Convert icons to RGBA
+      - name: Convert icons to 8-bit RGBA
         working-directory: blaxin/src-tauri/icons
         run: |
           sudo apt-get install -y imagemagick
           for f in *.png; do
-            convert "$f" -depth 8 RGBA "$f.tmp" && mv "$f.tmp" "$f"
-            echo "Converted $f to RGBA"
+            convert "$f" -depth 8 PNG32:"$f.tmp" && mv "$f.tmp" "$f"
+            echo "Converted $f to 8-bit RGBA"
           done
 
       - name: Build Tauri app (AppImage + deb)
@@ -118,8 +128,9 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          export PATH="${HOME}/.cargo/bin:$PATH"
           cd src-tauri
-          cargo tauri build --target x86_64-unknown-linux-gnu
+          cargo tauri build --target x86_64-unknown-linux-gnu --bundles appimage,deb
           cd ..
 
       - name: Find build artifacts
@@ -189,29 +200,35 @@ jobs:
         id: notes
         run: |
           VERSION="${GITHUB_REF#refs/tags/}"
-          cat > release_notes.md << 'EOF'
+          VERSION_NUM="${VERSION#v}"
+          cat > release_notes.md << EOF
           # BLAXIN ${VERSION}
 
           ## Downloads
 
           | File | Description |
           |------|-------------|
-          | `blaxin-${VERSION}-x86_64.AppImage` | Portable Linux app (no install needed) |
-          | `blaxin_${VERSION}_amd64.deb` | Debian/Ubuntu package |
+          | \`BLAXIN_${VERSION_NUM}_amd64.AppImage\` | Portable Linux app (no install needed) |
+          | \`BLAXIN_${VERSION_NUM}_amd64.deb\` | Debian/Ubuntu package |
 
-          ## Installation
+          ## Quick Install
+
+          ### One-line installer
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/alex3430/Blaxin/main/install.sh | bash
+          \`\`\`
 
           ### AppImage
-          ```bash
-          chmod +x blaxin-*.AppImage
-          ./blaxin-*.AppImage
-          ```
+          \`\`\`bash
+          chmod +x BLAXIN_*.AppImage
+          ./BLAXIN_*.AppImage
+          \`\`\`
 
           ### .deb package
-          ```bash
-          sudo dpkg -i blaxin_*.deb
+          \`\`\`bash
+          sudo dpkg -i BLAXIN_*.deb
           sudo apt-get install -f  # Fix any missing dependencies
-          ```
+          \`\`\`
 
           ## What's Changed
           See commit history for details.
