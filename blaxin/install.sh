@@ -120,6 +120,26 @@ retry() {
     done
 }
 
+# ── JSON Parsing ───────────────────────────────────────────────────────
+# Use jq if available, fall back to grep/sed
+HAS_JQ=false
+if check_command jq; then
+    HAS_JQ=true
+fi
+
+# Parse a JSON field using jq or grep/sed
+json_get() {
+    local json="$1"
+    local field="$2"
+
+    if [[ "${HAS_JQ}" == "true" ]]; then
+        echo "${json}" | jq -r "${field}" 2>/dev/null
+    else
+        # Fallback: grep/sed for simple fields
+        echo "${json}" | grep -o "\"${field}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -1 | sed "s/.*\"${field}\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\".*/\1/"
+    fi
+}
+
 # ── Banner ─────────────────────────────────────────────────────────────
 echo ""
 echo -e "${CYAN}${BOLD}"
@@ -259,18 +279,52 @@ if [[ -z "${RELEASE_JSON}" ]]; then
     exit "${EXIT_NETWORK_ERROR}"
 fi
 
-# Parse version
-VERSION=$(echo "${RELEASE_JSON}" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+# Parse version using jq or grep
+VERSION=""
+if [[ "${HAS_JQ}" == "true" ]]; then
+    VERSION=$(echo "${RELEASE_JSON}" | jq -r '.tag_name // empty' 2>/dev/null)
+else
+    VERSION=$(echo "${RELEASE_JSON}" | grep -o '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+fi
 
 if [[ -z "${VERSION}" ]]; then
     fatal "Release metadata is malformed. Could not determine version." \
           "Please report this at https://github.com/${REPO}/issues"
 fi
 
+# Check if release is a draft (reject drafts)
+IS_DRAFT=""
+if [[ "${HAS_JQ}" == "true" ]]; then
+    IS_DRAFT=$(echo "${RELEASE_JSON}" | jq -r '.draft // false' 2>/dev/null)
+fi
+if [[ "${IS_DRAFT}" == "true" ]]; then
+    fatal "The latest release is a draft and cannot be installed." \
+          "Visit https://github.com/${REPO}/releases for published releases."
+fi
+
 success "Latest version: ${VERSION}"
 
-# Find AppImage asset
-APPIMAGE_URL=$(echo "${RELEASE_JSON}" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*\.AppImage"' | head -1 | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+# Find AppImage asset — reject source archives and non-AppImage files
+APPIMAGE_URL=""
+if [[ "${HAS_JQ}" == "true" ]]; then
+    # Use jq to find the AppImage asset, explicitly rejecting source archives
+    APPIMAGE_URL=$(echo "${RELEASE_JSON}" | jq -r '
+        .assets[]? |
+        select(.name | test("\\.AppImage$")) |
+        select(.name | test("(source|\\.tar\\.gz|\\.zip|data\\.tar\\.gz|control\\.tar\\.gz)") | not) |
+        .browser_download_url
+    ' 2>/dev/null | head -1)
+else
+    # Fallback: grep for AppImage URLs, explicitly rejecting source archives
+    APPIMAGE_URL=$(echo "${RELEASE_JSON}" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*\.AppImage"' | head -1 | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
+    
+    # Extra safety: reject if it looks like a source archive
+    if [[ "${APPIMAGE_URL}" == *".tar.gz"* ]] || [[ "${APPIMAGE_URL}" == *".zip"* ]] || \
+       [[ "${APPIMAGE_URL}" == *"source"* ]] || [[ "${APPIMAGE_URL}" == *"data.tar"* ]] || \
+       [[ "${APPIMAGE_URL}" == *"control.tar"* ]]; then
+        APPIMAGE_URL=""
+    fi
+fi
 
 if [[ -z "${APPIMAGE_URL}" ]]; then
     fatal "No AppImage found in release ${VERSION}." \
@@ -347,6 +401,7 @@ if [[ "${HAS_SHA256}" == "true" ]]; then
 
     # Try to download checksum file
     CHECKSUM_OK=false
+
     if download_file "${CHECKSUM_URL}" "${CHECKSUM_PATH}" 2>/dev/null; then
         # Parse expected hash (format: "hash  filename" or just "hash")
         EXPECTED_HASH=$(awk '{print $1}' "${CHECKSUM_PATH}")
