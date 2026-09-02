@@ -7,6 +7,7 @@ import { providers, AIProvider, ProviderError } from '../providers/index.js';
 import { toolRegistry } from '../tools/index.js';
 import { logger } from '../utils/logger.js';
 import { getConfig } from '../utils/config.js';
+import { sessionState } from '../utils/session-state.js';
 
 type EventCallback = (event: string, data: any) => void;
 
@@ -24,23 +25,24 @@ CAPABILITIES:
 - Launch and manage applications
 
 BEHAVIOR:
-- Break complex tasks into clear, sequential steps
-- Execute one tool action at a time
-- After executing a tool, analyze the result before proceeding
-- If an action fails, diagnose the failure and try a safe alternative
-- Verify important actions (e.g., after clicking, take a screenshot to confirm)
-- For destructive operations (delete, overwrite), confirm with the user first
-- Report progress clearly and concisely at each step
-- Never expose API keys, secrets, or sensitive system information
-- When a task is complete, provide a clear summary of what was done
+1. ANALYZE the request before acting. Understand what the user wants.
+2. PLAN your approach: break complex tasks into clear, sequential steps.
+3. EXECUTE one tool action at a time.
+4. OBSERVE the result of each tool call before proceeding.
+5. VERIFY important outcomes (e.g., after writing a file, confirm it was written).
+6. If an action fails, diagnose the failure and try a safe alternative.
+7. For destructive operations (delete, overwrite), confirm with the user first.
+8. Report progress clearly and concisely at each step.
+9. Never expose API keys, secrets, or sensitive system information.
+10. When a task is complete, provide a clear summary of what was done.
 
 ERROR RECOVERY:
-- If a tool fails, analyze why it failed before retrying
+- If a tool fails, analyze WHY it failed before retrying
 - For network errors: check connectivity, try again after a brief pause
 - For permission errors: explain what permission is needed
 - For missing tools: suggest installing the required tool
 - For file not found: check the path, list the directory to find the correct file
-- Never retry the exact same failed action more than once
+- Never retry the exact same failed action more than once without changing approach
 - If recovery is impossible, explain the limitation clearly
 
 VERIFICATION:
@@ -48,6 +50,7 @@ VERIFICATION:
 - After clicking a button/UI element, verify the expected change occurred
 - After writing a file, verify the content was written correctly
 - After running a command, check the exit code and output for errors
+- After installing software, verify the installation succeeded
 
 When using tools:
 1. Think about which tool is needed and why
@@ -55,15 +58,57 @@ When using tools:
 3. Wait for the tool result
 4. Analyze the result - did it succeed? If not, why?
 5. Decide the next step based on the result
+6. Verify the outcome before moving on
 
 Always provide a clear final answer when the task is complete.`;
+
+// ── Execution State ─────────────────────────────────────────────
+
+interface ExecutionStep {
+  id: string;
+  description: string;
+  toolName?: string;
+  toolArgs?: Record<string, unknown>;
+  state: 'pending' | 'executing' | 'completed' | 'failed' | 'skipped' | 'retrying';
+  result?: string;
+  error?: string;
+  attempts: number;
+  startTime?: number;
+  endTime?: number;
+}
+
+interface TaskPlan {
+  id: string;
+  objective: string;
+  steps: ExecutionStep[];
+  currentStepIndex: number;
+  state: 'planning' | 'executing' | 'observing' | 'completed' | 'failed';
+  startTime: number;
+  endTime?: number;
+  verificationRequired: boolean;
+}
+
+// ── Orchestrator ────────────────────────────────────────────────
 
 export class AgentOrchestrator {
   private conversationHistory: ChatMessage[] = [];
   private currentTask: AgentTask | null = null;
+  private currentPlan: TaskPlan | null = null;
   private state: AgentState = 'idle';
   private eventCallback: EventCallback | null = null;
   private stepCount = 0;
+  private consecutiveErrors = 0;
+  private readonly MAX_CONSECUTIVE_ERRORS = 3;
+  private readonly MAX_RETRIES_PER_STEP = 2;
+
+  constructor() {
+    // Restore conversation history from persisted state
+    const savedHistory = sessionState.getHistory();
+    if (savedHistory.length > 0) {
+      this.conversationHistory = savedHistory as ChatMessage[];
+      logger.info('orchestrator', `Restored ${savedHistory.length} messages from session state`);
+    }
+  }
 
   setEventCallback(callback: EventCallback): void {
     this.eventCallback = callback;
@@ -111,6 +156,7 @@ export class AgentOrchestrator {
       timestamp: Date.now(),
     };
     this.conversationHistory.push(userMsg);
+    sessionState.addMessage(userMsg);
     this.emit('agent-message', userMsg);
 
     // Create task
@@ -123,7 +169,8 @@ export class AgentOrchestrator {
       startTime: Date.now(),
     };
 
-    this.setState('thinking', 'Processing your request...');
+    this.consecutiveErrors = 0;
+    this.setState('thinking', 'Analyzing your request...');
     this.stepCount = 0;
 
     try {
@@ -143,6 +190,13 @@ export class AgentOrchestrator {
         this.currentTask.state = 'completed';
       }
     }
+
+    if (this.currentPlan) {
+      this.currentPlan.endTime = Date.now();
+      if (this.currentPlan.state === 'planning' || this.currentPlan.state === 'executing') {
+        this.currentPlan.state = 'completed';
+      }
+    }
   }
 
   private async executeLoop(
@@ -154,16 +208,8 @@ export class AgentOrchestrator {
     while (this.stepCount < maxSteps) {
       this.stepCount++;
 
-      // Build messages for the AI
-      const messages: ChatMessage[] = [
-        {
-          id: 'system',
-          role: 'system',
-          content: SYSTEM_PROMPT,
-          timestamp: Date.now(),
-        },
-        ...this.conversationHistory.slice(-20), // Keep last 20 messages for context
-      ];
+      // Build messages for the AI with improved context management
+      const messages = this.buildMessages();
 
       // Get tool definitions
       const tools = toolRegistry.getToolDefinitions();
@@ -180,6 +226,9 @@ export class AgentOrchestrator {
           temperature: 0.7,
         });
 
+        // Reset consecutive errors on successful response
+        this.consecutiveErrors = 0;
+
         // Handle tool calls
         if (response.toolCalls && response.toolCalls.length > 0) {
           // Add assistant message with tool calls to history
@@ -190,6 +239,7 @@ export class AgentOrchestrator {
             timestamp: Date.now(),
           };
           this.conversationHistory.push(assistantMsg);
+          sessionState.addMessage(assistantMsg);
           this.emit('agent-message', assistantMsg);
 
           if (response.message.content) {
@@ -200,6 +250,11 @@ export class AgentOrchestrator {
           for (const toolCall of response.toolCalls) {
             await this.executeToolCall(toolCall, provider, modelId, maxSteps);
           }
+
+          // After tool execution, add an observation prompt
+          if (this.stepCount < maxSteps - 1) {
+            this.setState('observing', 'Analyzing results...');
+          }
         } else {
           // No tool calls - this is the final response
           const assistantMsg: ChatMessage = {
@@ -209,6 +264,7 @@ export class AgentOrchestrator {
             timestamp: Date.now(),
           };
           this.conversationHistory.push(assistantMsg);
+          sessionState.addMessage(assistantMsg);
           this.emit('agent-message', assistantMsg);
 
           this.setState('completed', 'Task completed');
@@ -216,26 +272,91 @@ export class AgentOrchestrator {
         }
       } catch (error: any) {
         if (error instanceof ProviderError) {
+          this.consecutiveErrors++;
           this.emit('error', {
             message: error.message,
             code: error.code,
             details: `Provider: ${error.providerId}`,
           });
-          this.setState('error', error.message);
-          return;
+
+          if (this.consecutiveErrors >= this.MAX_CONSECUTIVE_ERRORS) {
+            this.setState('error', `Too many consecutive errors (${this.consecutiveErrors}). Stopping.`);
+            return;
+          }
+
+          // Wait before retrying on rate limit
+          if (error.code === 'RATE_LIMIT') {
+            await this.sleep(5000);
+          } else if (error.code === 'NETWORK_ERROR') {
+            await this.sleep(2000);
+          } else {
+            this.setState('error', error.message);
+            return;
+          }
+        } else {
+          throw error;
         }
-        throw error;
       }
     }
 
     // Reached max steps
-    this.emit('agent-message', {
+    const summaryMsg: ChatMessage = {
       id: uuidv4(),
       role: 'assistant',
-      content: `I've reached the maximum number of steps (${maxSteps}) for this task. Let me summarize what was accomplished.`,
+      content: `I've reached the maximum number of steps (${maxSteps}) for this task. Here's a summary of what was accomplished:\n\n${this.getExecutionSummary()}`,
       timestamp: Date.now(),
-    });
+    };
+    this.conversationHistory.push(summaryMsg);
+    sessionState.addMessage(summaryMsg);
+    this.emit('agent-message', summaryMsg);
     this.setState('completed', 'Reached step limit');
+  }
+
+  private buildMessages(): ChatMessage[] {
+    // Improved context management: keep more context for recent messages,
+    // less for older ones. Include task plan if available.
+    const maxHistory = 30;
+    const recentHistory = this.conversationHistory.slice(-maxHistory);
+
+    const messages: ChatMessage[] = [
+      {
+        id: 'system',
+        role: 'system',
+        content: SYSTEM_PROMPT + this.getTaskContext(),
+        timestamp: Date.now(),
+      },
+      ...recentHistory,
+    ];
+
+    return messages;
+  }
+
+  private getTaskContext(): string {
+    if (!this.currentPlan) return '';
+
+    const completedSteps = this.currentPlan.steps.filter(s => s.state === 'completed');
+    const failedSteps = this.currentPlan.steps.filter(s => s.state === 'failed');
+
+    if (completedSteps.length === 0 && failedSteps.length === 0) return '';
+
+    let context = '\n\nCURRENT TASK CONTEXT:\n';
+    context += `Objective: ${this.currentPlan.objective}\n`;
+
+    if (completedSteps.length > 0) {
+      context += 'Completed steps:\n';
+      for (const step of completedSteps) {
+        context += `  ✓ ${step.description}\n`;
+      }
+    }
+
+    if (failedSteps.length > 0) {
+      context += 'Failed steps (consider alternative approaches):\n';
+      for (const step of failedSteps) {
+        context += `  ✗ ${step.description}: ${step.error || 'Unknown error'}\n`;
+      }
+    }
+
+    return context;
   }
 
   private async executeToolCall(
@@ -251,6 +372,23 @@ export class AgentOrchestrator {
       toolArgs = JSON.parse(toolCall.function.arguments);
     } catch {
       toolArgs = {};
+      logger.warn('orchestrator', `Failed to parse tool arguments for ${toolName}`);
+    }
+
+    // Track this step
+    const step: ExecutionStep = {
+      id: toolCall.id,
+      description: this.describeToolAction(toolName, toolArgs),
+      toolName,
+      toolArgs,
+      state: 'executing',
+      attempts: 1,
+      startTime: Date.now(),
+    };
+
+    if (this.currentTask) {
+      this.currentTask.steps.push(step);
+      this.currentTask.currentStep = this.currentTask.steps.length;
     }
 
     // Check if confirmation is needed
@@ -258,17 +396,16 @@ export class AgentOrchestrator {
       this.emit('confirmation-required', {
         taskId: this.currentTask?.id,
         stepId: toolCall.id,
-        description: `Execute ${toolName}`,
+        description: `Execute ${toolName}: ${step.description}`,
         action: JSON.stringify({ tool: toolName, args: toolArgs }),
       });
-      logger.info('orchestrator', `Confirmation required for ${toolName} but proceeding`);
+      logger.info('orchestrator', `Confirmation required for ${toolName}`);
     }
 
     // Describe the action in user-friendly terms
-    const actionDescription = this.describeToolAction(toolName, toolArgs);
-    this.setState('executing', actionDescription);
+    this.setState('executing', step.description);
     this.emit('tool-execution', { toolName, args: toolArgs, state: 'executing' });
-    this.emit('activity', { type: 'executing', content: actionDescription });
+    this.emit('activity', { type: 'executing', content: step.description });
 
     // Add tool call to conversation
     const toolMsg: ChatMessage = {
@@ -279,52 +416,76 @@ export class AgentOrchestrator {
       toolCallId: toolCall.id,
     };
     this.conversationHistory.push(toolMsg);
+    sessionState.addMessage(toolMsg);
 
     // Execute the tool with retry for transient errors
     let result = await toolRegistry.execute(toolName, toolArgs);
     let retries = 0;
-    const maxRetries = 1; // Only retry once for transient errors
 
-    while (!result.success && retries < maxRetries && this.isRetryableError(result.error || '')) {
+    while (!result.success && retries < this.MAX_RETRIES_PER_STEP && this.isRetryableError(result.error || '')) {
       retries++;
+      step.state = 'retrying';
+      step.attempts++;
       logger.info('orchestrator', `Retrying tool ${toolName} (attempt ${retries + 1})`);
-      this.emit('activity', { type: 'retrying', content: `Retrying ${toolName}...` });
-      await new Promise(r => setTimeout(r, 1000)); // Brief pause before retry
+      this.emit('activity', { type: 'retrying', content: `Retrying ${toolName} (attempt ${retries + 1})...` });
+      await this.sleep(1000 * retries); // Exponential backoff
       result = await toolRegistry.execute(toolName, toolArgs);
     }
+
+    // Update step state
+    step.state = result.success ? 'completed' : 'failed';
+    step.result = result.output?.slice(0, 1000);
+    step.error = result.error;
+    step.endTime = Date.now();
 
     this.emit('tool-execution', {
       toolName,
       args: toolArgs,
-      state: result.success ? 'completed' : 'failed',
+      state: step.state,
       result: result.output?.slice(0, 500),
+      stepId: step.id,
     });
 
     // Add tool result to conversation
+    const resultContent = result.success
+      ? `Tool result (${toolName}): ${result.output}`
+      : `Tool error (${toolName}): ${result.error || 'Unknown error'}`;
+    
     const resultMsg: ChatMessage = {
       id: uuidv4(),
       role: 'tool',
-      content: result.success
-        ? `Tool result: ${result.output}`
-        : `Tool error: ${result.error || 'Unknown error'}`,
+      content: resultContent,
       timestamp: Date.now(),
       toolCallId: toolCall.id,
       name: toolName,
     };
     this.conversationHistory.push(resultMsg);
+    sessionState.addMessage(resultMsg);
 
-    logger.info('orchestrator', `Tool ${toolName}: ${result.success ? 'success' : 'failed'}`);
+    // Track consecutive errors
+    if (result.success) {
+      this.consecutiveErrors = 0;
+    } else {
+      this.consecutiveErrors++;
+      if (this.consecutiveErrors >= this.MAX_CONSECUTIVE_ERRORS) {
+        logger.warn('orchestrator', `Too many consecutive errors (${this.consecutiveErrors}), may stop soon`);
+      }
+    }
+
+    logger.info('orchestrator', `Tool ${toolName}: ${step.state} (${step.attempts} attempts, ${step.endTime! - step.startTime!}ms)`);
   }
 
   private isRetryableError(error: string): boolean {
-    const retryable = ['timeout', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'network', 'temporary'];
+    const retryable = ['timeout', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'network', 'temporary', 'EPIPE'];
     return retryable.some(r => error.toLowerCase().includes(r));
   }
 
   private describeToolAction(toolName: string, args: Record<string, unknown>): string {
     switch (toolName) {
-      case 'terminal':
-        return `Running: ${(args.command as string || '').slice(0, 60)}`;
+      case 'terminal': {
+        const cmd = (args.command as string || '').slice(0, 80);
+        return `Running: ${cmd}`;
+      }
       case 'screenshot':
         return 'Taking screenshot...';
       case 'computer-control': {
@@ -336,12 +497,16 @@ export class AgentOrchestrator {
         if (action === 'list_windows') return 'Listing open windows...';
         return `Computer control: ${action}`;
       }
-      case 'filesystem':
-        return `File operation: ${args.operation} on ${(args.path as string || '').split('/').pop()}`;
-      case 'browser':
+      case 'filesystem': {
+        const op = args.operation as string;
+        const path = (args.path as string || '').split('/').pop() || args.path;
+        return `File ${op}: ${path}`;
+      }
+      case 'browser': {
         if (args.action === 'search') return `Searching: ${args.query}`;
-        if (args.action === 'open_url') return `Opening: ${args.url}`;
+        if (args.action === 'open_url') return `Opening: ${(args.url as string || '').slice(0, 60)}`;
         return `Browser: ${args.action}`;
+      }
       case 'clipboard':
         return args.action === 'read' ? 'Reading clipboard...' : 'Writing to clipboard...';
       case 'search':
@@ -351,6 +516,30 @@ export class AgentOrchestrator {
       default:
         return `Using ${toolName}...`;
     }
+  }
+
+  private getExecutionSummary(): string {
+    if (!this.currentTask || this.currentTask.steps.length === 0) {
+      return 'No steps were executed.';
+    }
+
+    const completed = this.currentTask.steps.filter(s => s.state === 'completed');
+    const failed = this.currentTask.steps.filter(s => s.state === 'failed');
+
+    let summary = `Executed ${this.currentTask.steps.length} steps:\n`;
+    summary += `  ✓ ${completed.length} succeeded\n`;
+    if (failed.length > 0) {
+      summary += `  ✗ ${failed.length} failed\n`;
+      for (const step of failed) {
+        summary += `    - ${step.description}: ${step.error || 'Unknown error'}\n`;
+      }
+    }
+
+    return summary;
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 
   getState(): AgentState {
@@ -368,7 +557,10 @@ export class AgentOrchestrator {
   clearHistory(): void {
     this.conversationHistory = [];
     this.currentTask = null;
+    this.currentPlan = null;
     this.stepCount = 0;
+    this.consecutiveErrors = 0;
+    sessionState.clearHistory();
     this.setState('idle');
     logger.info('orchestrator', 'History cleared');
   }

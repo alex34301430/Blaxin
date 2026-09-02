@@ -10,6 +10,7 @@ import { logger } from './utils/logger.js';
 import { loadConfig, saveConfig } from './utils/config.js';
 import { credentialStore } from './utils/credentials.js';
 import { runDiagnostics } from './utils/diagnostics.js';
+import { sessionState } from './utils/session-state.js';
 import { APP_VERSION, GITHUB_REPO, GITHUB_RELEASES_URL } from './utils/version.js';
 import { ProviderId, AppConfig } from './types.js';
 
@@ -297,6 +298,9 @@ server.listen(PORT, '0.0.0.0', async () => {
   // Initialize providers
   await providers.initializeAll();
   
+  // Start session state auto-save
+  sessionState.startAutoSave();
+  
   // Send ready event to any connected clients
   wss.clients.forEach(client => {
     if (client.readyState === WebSocket.OPEN) {
@@ -308,6 +312,7 @@ server.listen(PORT, '0.0.0.0', async () => {
 // Graceful shutdown
 const shutdown = () => {
   logger.info('server', 'Shutting down...');
+  sessionState.stopAutoSave();
   wss.clients.forEach(client => {
     try { client.close(1001, 'Server shutting down'); } catch {}
   });

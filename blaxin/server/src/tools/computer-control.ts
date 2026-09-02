@@ -1,8 +1,9 @@
 import { Tool, ToolResult } from '../types.js';
-import { exec } from 'child_process';
+import { exec, execFile } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 type DisplayServer = 'x11' | 'wayland' | 'unknown';
 
@@ -123,8 +124,11 @@ export class ComputerControlTool implements Tool {
   }
 
   private async xdotoolType(text: string): Promise<void> {
-    const escaped = text.replace(/'/g, "'\\''");
-    await this.runCommand(`DISPLAY=:0 xdotool type --clearmodifiers '${escaped}'`);
+    // Use xdotool type via execFile to avoid shell injection
+    await execFileAsync('xdotool', ['type', '--clearmodifiers', text], {
+      timeout: 5000,
+      env: { ...process.env, DISPLAY: process.env.DISPLAY || ':0' },
+    });
   }
 
   private async xdotoolKey(key: string): Promise<void> {
@@ -321,13 +325,19 @@ export class ComputerControlTool implements Tool {
         case 'launch_app': {
           const app = args.app as string;
           const ds = await this.detectDisplayServer();
-          const display = ds === 'wayland' ? '' : 'DISPLAY=:0 ';
+          const env = { ...process.env, DISPLAY: process.env.DISPLAY || ':0' };
           try {
-            await execAsync(`${display}nohup ${app} &>/dev/null &`, { timeout: 5000 });
+            await execFileAsync('nohup', [app], {
+              timeout: 5000,
+              env,
+            });
             return { success: true, output: `Launched: ${app}` };
           } catch {
             try {
-              await execAsync(`${display}nohup xdg-open "${app}" &>/dev/null &`, { timeout: 5000 });
+              await execFileAsync('nohup', ['xdg-open', app], {
+                timeout: 5000,
+                env,
+              });
               return { success: true, output: `Launched via xdg-open: ${app}` };
             } catch (error: any) {
               return { success: false, output: '', error: `Failed to launch ${app}: ${error.message}` };

@@ -1,11 +1,11 @@
 import { Tool, ToolResult } from '../types.js';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { readFileSync, existsSync, unlinkSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export class ScreenshotTool implements Tool {
   name = 'screenshot';
@@ -41,31 +41,25 @@ export class ScreenshotTool implements Tool {
       const tools = [
         {
           name: 'scrot',
-          check: 'which scrot',
-          cmd: `scrot "${screenshotPath}"`,
+          cmd: 'scrot',
+          args: [screenshotPath],
         },
         {
           name: 'gnome-screenshot',
-          check: 'which gnome-screenshot',
-          cmd: `gnome-screenshot -f "${screenshotPath}"`,
+          cmd: 'gnome-screenshot',
+          args: ['-f', screenshotPath],
         },
         {
           name: 'import',
-          check: 'which import',
-          cmd: `import -window root "${screenshotPath}"`,
-        },
-        {
-          name: 'xdotool+scrot',
-          check: 'which scrot',
-          cmd: `scrot "${screenshotPath}"`,
+          cmd: 'import',
+          args: ['-window', 'root', screenshotPath],
         },
       ];
 
       let captured = false;
       for (const tool of tools) {
         try {
-          await execAsync(tool.check, { timeout: 5000 });
-          await execAsync(tool.cmd, { timeout: 10000 });
+          await execFileAsync(tool.cmd, tool.args, { timeout: 10000 });
           captured = true;
           break;
         } catch {
@@ -74,9 +68,12 @@ export class ScreenshotTool implements Tool {
       }
 
       if (!captured) {
-        // Fallback: use xdg to capture
+        // Fallback: check if display is available
         try {
-          await execAsync(`bash -c 'DISPLAY=:0 xdotool getactivewindow getwindowname'`, { timeout: 5000 });
+          await execFileAsync('xdotool', ['getactivewindow', 'getwindowname'], {
+            timeout: 5000,
+            env: { ...process.env, DISPLAY: process.env.DISPLAY || ':0' },
+          });
           return {
             success: true,
             output: 'Screenshot tools not available, but X11 display is present. Install scrot: sudo apt install scrot',

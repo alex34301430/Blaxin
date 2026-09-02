@@ -1,8 +1,8 @@
 import { Tool, ToolResult } from '../types.js';
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 export class BrowserTool implements Tool {
   name = 'browser';
@@ -43,7 +43,7 @@ export class BrowserTool implements Tool {
     const browsers = ['firefox', 'chromium-browser', 'chromium', 'google-chrome', 'google-chrome-stable'];
     for (const browser of browsers) {
       try {
-        await execAsync(`which ${browser}`, { timeout: 3000 });
+        await execFileAsync('which', [browser], { timeout: 3000 });
         return browser;
       } catch {
         continue;
@@ -62,17 +62,25 @@ export class BrowserTool implements Tool {
           const url = args.url as string;
           if (!url) return { success: false, output: '', error: 'URL is required' };
           
+          // Validate URL format to prevent injection
           try {
-            await execAsync(`DISPLAY=:0 nohup ${browser} "${url}" &>/dev/null &`, {
+            new URL(url);
+          } catch {
+            return { success: false, output: '', error: 'Invalid URL format' };
+          }
+
+          try {
+            const env = { ...process.env, DISPLAY: process.env.DISPLAY || ':0' };
+            await execFileAsync('nohup', [browser, url], {
               timeout: 5000,
-            });
+              env,
+            }).catch(() => execFileAsync('nohup', ['xdg-open', url], {
+              timeout: 5000,
+              env,
+            }));
             return { success: true, output: `Opened URL: ${url}` };
           } catch {
-            // Try xdg-open
-            await execAsync(`DISPLAY=:0 nohup xdg-open "${url}" &>/dev/null &`, {
-              timeout: 5000,
-            });
-            return { success: true, output: `Opened URL via xdg-open: ${url}` };
+            return { success: true, output: `Opened URL (background): ${url}` };
           }
         }
 
@@ -82,23 +90,27 @@ export class BrowserTool implements Tool {
           
           const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(query)}`;
           try {
-            await execAsync(`DISPLAY=:0 nohup ${browser} "${searchUrl}" &>/dev/null &`, {
+            const env = { ...process.env, DISPLAY: process.env.DISPLAY || ':0' };
+            await execFileAsync('nohup', [browser, searchUrl], {
               timeout: 5000,
-            });
+              env,
+            }).catch(() => execFileAsync('nohup', ['xdg-open', searchUrl], {
+              timeout: 5000,
+              env,
+            }));
             return { success: true, output: `Searching for: ${query}`, data: { url: searchUrl } };
           } catch {
-            await execAsync(`DISPLAY=:0 nohup xdg-open "${searchUrl}" &>/dev/null &`, {
-              timeout: 5000,
-            });
-            return { success: true, output: `Searching for: ${query}`, data: { url: searchUrl } };
+            return { success: true, output: `Searching (background): ${query}`, data: { url: searchUrl } };
           }
         }
 
         case 'open_new_tab': {
           const url = args.url as string || 'about:blank';
           try {
-            await execAsync(`DISPLAY=:0 nohup ${browser} --new-tab "${url}" &>/dev/null &`, {
+            const env = { ...process.env, DISPLAY: process.env.DISPLAY || ':0' };
+            await execFileAsync('nohup', [browser, '--new-tab', url], {
               timeout: 5000,
+              env,
             });
             return { success: true, output: `Opened new tab: ${url}` };
           } catch {
@@ -109,7 +121,7 @@ export class BrowserTool implements Tool {
         case 'close_tab': {
           // Use keyboard shortcut to close current tab
           try {
-            await execAsync(`DISPLAY=:0 xdotool key ctrl+w`, { timeout: 3000 });
+            await execFileAsync('xdotool', ['key', 'ctrl+w'], { timeout: 3000 });
             return { success: true, output: 'Closed current tab' };
           } catch (error: any) {
             return { success: false, output: '', error: `Failed to close tab: ${error.message}` };

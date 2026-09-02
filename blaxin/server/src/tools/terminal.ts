@@ -81,7 +81,9 @@ export class TerminalTool implements Tool {
     const dangerous = [
       'rm -rf', 'rm -r /', 'mkfs', 'dd if=', ':(){', 'fork',
       'shutdown', 'reboot', 'halt', 'init 0', 'init 6',
-      'chmod -R 777', 'chown -R',
+      'chmod -R 777', 'chown -R', 'wget ', 'curl |', 'curl ',
+      'eval ', 'exec ', 'sudo rm', 'sudo rmdir',
+      '> /dev/', 'mv / ', 'rm -r ~',
     ];
     return dangerous.some(d => cmd.includes(d));
   }

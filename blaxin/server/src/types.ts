@@ -131,7 +131,7 @@ export interface TaskStep {
   description: string;
   toolName?: string;
   toolArgs?: Record<string, unknown>;
-  state: 'pending' | 'executing' | 'completed' | 'failed' | 'skipped';
+  state: 'pending' | 'executing' | 'completed' | 'failed' | 'skipped' | 'retrying';
   result?: string;
   error?: string;
 }
