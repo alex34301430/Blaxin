@@ -305,17 +305,20 @@ jobs:
           VERSION="${{ steps.manifest.outputs.version_num }}"
           cd artifacts
 
-          # Rename AppImage with version in name
+          echo "=== Files in artifacts/ ==="
+          ls -la
+
+          # Rename AppImage
           for f in *.AppImage; do
             if [ -f "$f" ]; then
               NEW_NAME="BLAXIN_${VERSION}_amd64.AppImage"
-              mv "$f" "$NEW_NAME"
-              echo "Renamed: $f -> $NEW_NAME"
-              # Update checksum
-              if [ -f "${f}.sha256" ]; then
-                sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256"
-                rm -f "${f}.sha256"
+              if [ "$f" != "$NEW_NAME" ]; then
+                mv "$f" "$NEW_NAME"
+                echo "Renamed: $f -> $NEW_NAME"
               fi
+              # Update checksum
+              sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256" 2>/dev/null || true
+              rm -f "*.AppImage.sha256" 2>/dev/null || true
             fi
           done
 
@@ -323,12 +326,12 @@ jobs:
           for f in *.deb; do
             if [ -f "$f" ]; then
               NEW_NAME="blaxin_${VERSION}_amd64.deb"
-              mv "$f" "$NEW_NAME"
-              echo "Renamed: $f -> $NEW_NAME"
-              if [ -f "${f}.sha256" ]; then
-                sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256"
-                rm -f "${f}.sha256"
+              if [ "$f" != "$NEW_NAME" ]; then
+                mv "$f" "$NEW_NAME"
+                echo "Renamed: $f -> $NEW_NAME"
               fi
+              sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256" 2>/dev/null || true
+              rm -f "*.deb.sha256" 2>/dev/null || true
             fi
           done
 
@@ -336,12 +339,12 @@ jobs:
           for f in *.tar.gz; do
             if [ -f "$f" ]; then
               NEW_NAME="BLAXIN_${VERSION}_x86_64.tar.gz"
-              mv "$f" "$NEW_NAME"
-              echo "Renamed: $f -> $NEW_NAME"
-              if [ -f "${f}.sha256" ]; then
-                sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256"
-                rm -f "${f}.sha256"
+              if [ "$f" != "$NEW_NAME" ]; then
+                mv "$f" "$NEW_NAME"
+                echo "Renamed: $f -> $NEW_NAME"
               fi
+              sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256" 2>/dev/null || true
+              rm -f "*.tar.gz.sha256" 2>/dev/null || true
             fi
           done
 
@@ -349,8 +352,10 @@ jobs:
           for f in *.sig; do
             if [ -f "$f" ]; then
               NEW_NAME="BLAXIN_${VERSION}_x86_64.tar.gz.sig"
-              mv "$f" "$NEW_NAME"
-              echo "Renamed: $f -> $NEW_NAME"
+              if [ "$f" != "$NEW_NAME" ]; then
+                mv "$f" "$NEW_NAME"
+                echo "Renamed: $f -> $NEW_NAME"
+              fi
             fi
           done
 
