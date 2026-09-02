@@ -309,49 +309,50 @@ jobs:
             exit 1
           fi
 
-          # The .sig file contains the minisign signature - read it for latest.json
-          SIG_CONTENT=$(cat "$SIG_FILE")
-          echo "AppImage signature loaded: ${#SIG_CONTENT} chars"
-
-          # Verify signature is non-empty and has expected format (minisign sigs have 2 lines)
-          LINE_COUNT=$(echo "$SIG_CONTENT" | wc -l)
-          echo "Signature line count: $LINE_COUNT"
-          if [ "$LINE_COUNT" -lt 2 ]; then
-            echo "ERROR: Signature does not have expected minisign format (at least 2 lines)"
-            echo "Content: $SIG_CONTENT"
-            exit 1
-          fi
-
-          # Generate latest.json for Tauri updater
-          cat > artifacts/latest.json << EOF
-          {
-            "version": "${VERSION_NUM}",
-            "notes": "BLAXIN ${VERSION} — See https://github.com/alex34301430/Blaxin/releases/tag/${VERSION} for details.",
-            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "platforms": {
-              "linux-x86_64": {
-                "signature": "${SIG_CONTENT}",
-                "url": "${DOWNLOAD_URL}"
-              }
-            }
-          }
-          EOF
-
-          echo ""
-          echo "=== Generated update manifest ==="
-          cat artifacts/latest.json
-
-          # Verify the JSON is valid and signature is non-empty
+          # Use Python to generate valid JSON (minisign sigs have newlines that
+          # break bash heredocs when embedded as string values)
           python3 -c "
-          import json, sys
-          with open('artifacts/latest.json') as f:
-              data = json.load(f)
-          sig = data['platforms']['linux-x86_64']['signature']
-          if not sig:
-              print('ERROR: signature is empty in generated JSON')
-              sys.exit(1)
-          print(f'✓ JSON valid, signature: {len(sig)} chars')
-          "
+import json, datetime, sys
+
+sig_content = open('$SIG_FILE').read().strip()
+if not sig_content:
+    print('ERROR: signature is empty')
+    sys.exit(1)
+
+lines = sig_content.split('\n')
+print(f'Signature: {len(sig_content)} chars, {len(lines)} lines')
+if len(lines) < 2:
+    print('ERROR: Signature does not have minisign format')
+    sys.exit(1)
+
+manifest = {
+    'version': '$VERSION_NUM',
+    'notes': 'BLAXIN $VERSION — See https://github.com/alex34301430/Blaxin/releases/tag/$VERSION for details.',
+    'pub_date': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
+    'platforms': {
+        'linux-x86_64': {
+            'signature': sig_content,
+            'url': '$DOWNLOAD_URL'
+        }
+    }
+}
+
+with open('artifacts/latest.json', 'w') as f:
+    json.dump(manifest, f, indent=2)
+
+print('Generated update manifest')
+with open('artifacts/latest.json') as f:
+    print(f.read())
+
+# Verify
+with open('artifacts/latest.json') as f:
+    data = json.load(f)
+sig = data['platforms']['linux-x86_64']['signature']
+if not sig:
+    print('ERROR: signature is empty in generated JSON')
+    sys.exit(1)
+print(f'✓ JSON valid, signature: {len(sig)} chars')
+"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
