@@ -63,10 +63,13 @@ jobs:
           echo "Downloading Node.js v${NODE_BUNDLE_VERSION} for Linux x86_64..."
           NODE_URL="https://nodejs.org/dist/v${NODE_BUNDLE_VERSION}/node-v${NODE_BUNDLE_VERSION}-linux-x64.tar.xz"
 
+          # Ensure the resources directory exists (it's gitignored)
+          mkdir -p blaxin/resources
           cd blaxin/resources
           rm -rf node
           mkdir -p node
 
+          echo "Downloading from: ${NODE_URL}"
           curl -fsSL "${NODE_URL}" | tar xJ --strip-components=1 -C node
 
           # Verify the binary exists and works
