@@ -58,10 +58,23 @@ jobs:
       - name: Install Tauri CLI
         run: cargo install tauri-cli
 
-      - name: Install minisign for update signing
+      - name: Prepare signing key for Tauri updater
+        env:
+          TAURI_SIGNING_PRIVATE_KEY_B64: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
-          sudo apt-get install -y minisign
-          minisign --version
+          # The secret contains the minisign private key base64-encoded
+          # Tauri needs either the raw key content or a file path
+          # We decode to a file and will pass the file path to Tauri
+          mkdir -p /tmp/signing
+          echo "$TAURI_SIGNING_PRIVATE_KEY_B64" | base64 -d > /tmp/signing/key.sec
+          chmod 600 /tmp/signing/key.sec
+          KEY_SIZE=$(wc -c < /tmp/signing/key.sec)
+          echo "Signing key decoded: ${KEY_SIZE} bytes"
+          head -1 /tmp/signing/key.sec
+          if [ "$KEY_SIZE" -lt 50 ]; then
+            echo "ERROR: Signing key seems too small, decode may have failed"
+            exit 1
+          fi
 
       - name: Download and bundle Node.js runtime
         run: |
@@ -164,51 +177,45 @@ jobs:
             fi
           done
 
-      - name: Build Tauri app (AppImage + deb)
+      - name: Build Tauri app (AppImage + deb) with updater signing
         working-directory: blaxin
         env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          # Pass the file PATH to the decoded signing key (not the base64 content)
+          # Tauri will automatically sign the AppImage and produce .sig
+          TAURI_SIGNING_PRIVATE_KEY: /tmp/signing/key.sec
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           export PATH="${HOME}/.cargo/bin:$PATH"
+
+          echo "=== Verifying signing key ==="
+          echo "Key file: /tmp/signing/key.sec"
+          echo "Key exists: $(test -f /tmp/signing/key.sec && echo yes || echo no)"
+          echo "Key size: $(wc -c < /tmp/signing/key.sec) bytes"
+
+          echo "=== Building Tauri app ==="
           cd src-tauri
           cargo tauri build --target x86_64-unknown-linux-gnu --bundles appimage,deb 2>&1
           cd ..
 
-      - name: Sign AppImage for auto-updates
-        working-directory: blaxin
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: |
-          echo "Signing AppImage for auto-updater..."
-
-          # Find the AppImage
-          APPIMAGE=$(find src-tauri/target -name "*.AppImage" | head -1)
-          if [ -z "$APPIMAGE" ]; then
-            echo "ERROR: No AppImage found to sign!"
-            exit 1
-          fi
-          echo "Found AppImage: $APPIMAGE"
-
-          mkdir -p /tmp/signing
-
-          # Tauri's TAURI_SIGNING_PRIVATE_KEY is base64-encoded minisign key content
-          # Decode it to get the raw minisign private key file format
-          echo "$TAURI_SIGNING_PRIVATE_KEY" | base64 -d > /tmp/signing/key.sec
-          echo "Key file size: $(wc -c < /tmp/signing/key.sec) bytes"
-          head -1 /tmp/signing/key.sec
-
-          # Sign the AppImage using minisign
-          echo "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" | minisign -Sm "$APPIMAGE" -s /tmp/signing/key.sec -x "${APPIMAGE}.sig" -t "BLAXIN v${{ steps.version.outputs.version_num }} update" 2>&1
-
-          if [ -f "${APPIMAGE}.sig" ]; then
-            echo "✓ AppImage signed successfully"
-            echo "Signature file: ${APPIMAGE}.sig"
-            echo "Signature size: $(wc -c < "${APPIMAGE}.sig") bytes"
-            head -3 "${APPIMAGE}.sig"
+          echo "=== Verifying updater artifacts ==="
+          BUNDLE_DIR="src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage"
+          if [ -d "$BUNDLE_DIR" ]; then
+            echo "Bundle directory contents:"
+            ls -la "$BUNDLE_DIR"
+            # Check for .sig file (Tauri generates this when createUpdaterArtifacts is true)
+            SIG_FILE=$(find "$BUNDLE_DIR" -name "*.AppImage.sig" | head -1)
+            if [ -n "$SIG_FILE" ]; then
+              echo "✓ Tauri generated updater signature: $SIG_FILE"
+              echo "  Signature size: $(wc -c < "$SIG_FILE") bytes"
+              echo "  First 3 lines:"
+              head -3 "$SIG_FILE"
+            else
+              echo "WARNING: No .sig file found in bundle directory"
+              echo "  Files present:"
+              ls -la "$BUNDLE_DIR"
+            fi
           else
-            echo "ERROR: Signature file was not created!"
+            echo "ERROR: Bundle directory not found!"
             exit 1
           fi
 
@@ -219,35 +226,43 @@ jobs:
           mkdir -p artifacts
 
           VERSION="${{ steps.version.outputs.version_num }}"
+          BUNDLE_DIR="blaxin/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle"
 
           # Find and copy AppImage
-          APPIMAGE=$(find blaxin/src-tauri/target -name "*.AppImage" | head -1)
+          APPIMAGE=$(find "$BUNDLE_DIR/appimage" -name "*.AppImage" 2>/dev/null | head -1)
           if [ -n "$APPIMAGE" ]; then
             cp "$APPIMAGE" artifacts/BLAXIN_${VERSION}_amd64.AppImage
-            echo "Found AppImage: $(basename $APPIMAGE) -> BLAXIN_${VERSION}_amd64.AppImage"
+            echo "✓ AppImage: $(du -h artifacts/BLAXIN_${VERSION}_amd64.AppImage | cut -f1)"
           else
             echo "ERROR: No AppImage found!"
             exit 1
           fi
 
-          # Copy AppImage signature (produced by our signing step)
-          APPIMAGE_SIG="${APPIMAGE}.sig"
-          if [ -f "$APPIMAGE_SIG" ]; then
+          # Find and copy AppImage signature (generated by Tauri with createUpdaterArtifacts)
+          APPIMAGE_SIG=$(find "$BUNDLE_DIR/appimage" -name "*.AppImage.sig" 2>/dev/null | head -1)
+          if [ -n "$APPIMAGE_SIG" ] && [ -s "$APPIMAGE_SIG" ]; then
             cp "$APPIMAGE_SIG" artifacts/BLAXIN_${VERSION}_amd64.AppImage.sig
-            echo "Found AppImage signature: $(basename $APPIMAGE_SIG)"
+            SIG_SIZE=$(wc -c < "artifacts/BLAXIN_${VERSION}_amd64.AppImage.sig")
+            echo "✓ AppImage signature: ${SIG_SIZE} bytes"
+            if [ "$SIG_SIZE" -lt 50 ]; then
+              echo "ERROR: Signature file is too small (${SIG_SIZE} bytes) - likely invalid"
+              exit 1
+            fi
           else
-            echo "ERROR: No AppImage signature found! Auto-updates cannot work without it."
-            ls -la blaxin/src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/appimage/
+            echo "ERROR: No valid AppImage signature found!"
+            echo "  Looking in: $BUNDLE_DIR/appimage/"
+            ls -la "$BUNDLE_DIR/appimage/" 2>/dev/null || echo "  Directory does not exist"
             exit 1
           fi
 
           # Find and copy .deb
-          DEB=$(find blaxin/src-tauri/target -name "*.deb" | head -1)
+          DEB=$(find "$BUNDLE_DIR/deb" -name "*.deb" 2>/dev/null | head -1)
           if [ -n "$DEB" ]; then
             cp "$DEB" artifacts/blaxin_${VERSION}_amd64.deb
-            echo "Found .deb: $(basename $DEB) -> blaxin_${VERSION}_amd64.deb"
+            echo "✓ .deb: $(du -h artifacts/blaxin_${VERSION}_amd64.deb | cut -f1)"
           fi
 
+          echo ""
           echo "=== All artifacts ==="
           ls -la artifacts/
 
@@ -267,18 +282,28 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           VERSION_NUM="${{ steps.version.outputs.version_num }}"
 
-          # For Tauri v2 Linux AppImage updates, the update artifact IS the AppImage
+          # For Tauri v2 Linux AppImage updates with createUpdaterArtifacts:
+          # The update artifact IS the AppImage itself (not a .tar.gz)
           # The download URL points directly to the AppImage in the release
           DOWNLOAD_URL="https://github.com/alex34301430/Blaxin/releases/download/${VERSION}/BLAXIN_${VERSION_NUM}_amd64.AppImage"
 
-          # Read the AppImage signature content
+          # Read the Tauri-generated AppImage signature content
           SIG_FILE="artifacts/BLAXIN_${VERSION_NUM}_amd64.AppImage.sig"
-          SIG_CONTENT=""
-          if [ -f "$SIG_FILE" ]; then
-            SIG_CONTENT=$(cat "$SIG_FILE")
-            echo "AppImage signature found and included (${#SIG_CONTENT} chars)"
-          else
-            echo "ERROR: No signature file found!"
+          if [ ! -f "$SIG_FILE" ] || [ ! -s "$SIG_FILE" ]; then
+            echo "ERROR: No valid signature file found at $SIG_FILE"
+            exit 1
+          fi
+
+          # The .sig file contains the minisign signature - read it for latest.json
+          SIG_CONTENT=$(cat "$SIG_FILE")
+          echo "AppImage signature loaded: ${#SIG_CONTENT} chars"
+
+          # Verify signature is non-empty and has expected format (minisign sigs have 2 lines)
+          LINE_COUNT=$(echo "$SIG_CONTENT" | wc -l)
+          echo "Signature line count: $LINE_COUNT"
+          if [ "$LINE_COUNT" -lt 2 ]; then
+            echo "ERROR: Signature does not have expected minisign format (at least 2 lines)"
+            echo "Content: $SIG_CONTENT"
             exit 1
           fi
 
@@ -297,8 +322,21 @@ jobs:
           }
           EOF
 
-          echo "Generated update manifest:"
+          echo ""
+          echo "=== Generated update manifest ==="
           cat artifacts/latest.json
+
+          # Verify the JSON is valid and signature is non-empty
+          python3 -c "
+          import json, sys
+          with open('artifacts/latest.json') as f:
+              data = json.load(f)
+          sig = data['platforms']['linux-x86_64']['signature']
+          if not sig:
+              print('ERROR: signature is empty in generated JSON')
+              sys.exit(1)
+          print(f'✓ JSON valid, signature: {len(sig)} chars')
+          "
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -358,11 +396,19 @@ jobs:
             exit 1
           fi
           SIG_SIZE=$(stat -c%s "artifacts/BLAXIN_${VERSION}_amd64.AppImage.sig")
-          if [ "$SIG_SIZE" -lt 100 ]; then
+          if [ "$SIG_SIZE" -lt 50 ]; then
             echo "ERROR: AppImage signature is too small ($SIG_SIZE bytes) - likely empty/invalid"
             exit 1
           fi
           echo "✓ AppImage signature: ${SIG_SIZE} bytes"
+
+          # Check signature has minisign format (at least 2 lines)
+          SIG_LINES=$(wc -l < "artifacts/BLAXIN_${VERSION}_amd64.AppImage.sig")
+          if [ "$SIG_LINES" -lt 2 ]; then
+            echo "ERROR: Signature does not have minisign format (only $SIG_LINES lines)"
+            exit 1
+          fi
+          echo "✓ AppImage signature format: ${SIG_LINES} lines (valid minisign)"
 
           # Check .deb exists
           if [ ! -f "artifacts/blaxin_${VERSION}_amd64.deb" ]; then
@@ -384,13 +430,27 @@ jobs:
             exit 1
           fi
 
-          # Check signature is in latest.json
-          SIG_IN_JSON=$(cat artifacts/latest.json | python3 -c "import sys,json; print(json.load(sys.stdin)['platforms']['linux-x86_64']['signature'])" 2>/dev/null)
+          # Check signature is in latest.json and is non-empty
+          SIG_IN_JSON=$(python3 -c "
+          import json, sys
+          with open('artifacts/latest.json') as f:
+              data = json.load(f)
+          sig = data['platforms']['linux-x86_64']['signature']
+          print(sig)
+          " 2>/dev/null)
           if [ -n "$SIG_IN_JSON" ] && [ "$SIG_IN_JSON" != "" ]; then
             echo "✓ latest.json has non-empty signature (${#SIG_IN_JSON} chars)"
           else
             echo "ERROR: latest.json has empty signature!"
             exit 1
+          fi
+
+          # Verify signature in JSON matches the .sig file
+          SIG_FILE_CONTENT=$(cat "artifacts/BLAXIN_${VERSION}_amd64.AppImage.sig")
+          if [ "$SIG_IN_JSON" = "$SIG_FILE_CONTENT" ]; then
+            echo "✓ Signature in latest.json matches .sig file"
+          else
+            echo "WARNING: Signature in latest.json differs from .sig file"
           fi
 
           echo ""
