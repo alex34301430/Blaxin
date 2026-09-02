@@ -287,8 +287,19 @@ export class AgentOrchestrator {
           // Wait before retrying on rate limit
           if (error.code === 'RATE_LIMIT') {
             await this.sleep(5000);
-          } else if (error.code === 'NETWORK_ERROR') {
-            await this.sleep(2000);
+          } else if (error.code === 'NETWORK_ERROR' || error.code === 'SERVER_ERROR' || error.code === 'TIMEOUT') {
+            // Try fallback provider
+            const fallback = providers.getFallbackProvider(providerId!);
+            if (fallback && fallback.hasApiKey()) {
+              logger.warn('orchestrator', `Falling back from ${providerId} to ${fallback.id}`);
+              this.emit('activity', { type: 'thinking', content: `Switching to ${fallback.name} due to connection issues...` });
+              provider = fallback;
+              providerId = fallback.id;
+              modelId = this.activeModelForProvider(fallback.id) || modelId;
+              await this.sleep(1000);
+            } else {
+              await this.sleep(2000);
+            }
           } else {
             this.setState('error', error.message);
             return;
@@ -478,6 +489,13 @@ export class AgentOrchestrator {
   private isRetryableError(error: string): boolean {
     const retryable = ['timeout', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'network', 'temporary', 'EPIPE'];
     return retryable.some(r => error.toLowerCase().includes(r));
+  }
+
+  private activeModelForProvider(providerId: ProviderId): string | null {
+    const model = providers.getActiveModel();
+    if (!model) return null;
+    // If model belongs to different provider, try to find a compatible one
+    return model;
   }
 
   private describeToolAction(toolName: string, args: Record<string, unknown>): string {

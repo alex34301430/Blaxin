@@ -1,5 +1,5 @@
 import { ProviderId, ModelInfo } from '../types.js';
-import { AIProvider, ProviderError } from './base.js';
+import { AIProvider, ProviderError, ProviderHealth } from './base.js';
 import { OpenRouterProvider } from './openrouter.js';
 import { OpenAIProvider } from './openai.js';
 import { AnthropicProvider } from './anthropic.js';
@@ -12,11 +12,24 @@ import { logger } from '../utils/logger.js';
 
 export { AIProvider, ProviderError } from './base.js';
 
+// ── Fallback Order ──────────────────────────────────────────────
+
+const FALLBACK_ORDER: ProviderId[] = [
+  'openrouter', 'openai', 'anthropic', 'google', 'groq', 'together', 'ollama',
+];
+
+// ── Health Check Interval ───────────────────────────────────────
+
+const HEALTH_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+// ── Provider Registry ───────────────────────────────────────────
+
 class ProviderRegistry {
   private providers: Map<ProviderId, AIProvider> = new Map();
   private modelsCache: Map<ProviderId, ModelInfo[]> = new Map();
   private activeProvider: ProviderId | null = null;
   private activeModel: string | null = null;
+  private healthCheckTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor() {
     this.register(new OpenRouterProvider());
@@ -50,6 +63,32 @@ class ProviderRegistry {
       } catch (error) {
         logger.warn('providers', `Failed to initialize ${provider.name}`, error);
       }
+    }
+
+    // Start periodic health checks
+    this.startHealthChecks();
+  }
+
+  private startHealthChecks(): void {
+    if (this.healthCheckTimer) return;
+
+    this.healthCheckTimer = setInterval(async () => {
+      for (const provider of this.providers.values()) {
+        if (!provider.apiKeyRequired || provider.hasApiKey()) {
+          try {
+            await provider.healthCheck();
+          } catch {}
+        }
+      }
+    }, HEALTH_CHECK_INTERVAL_MS);
+
+    logger.info('providers', 'Periodic health checks enabled');
+  }
+
+  stopHealthChecks(): void {
+    if (this.healthCheckTimer) {
+      clearInterval(this.healthCheckTimer);
+      this.healthCheckTimer = null;
     }
   }
 
@@ -116,6 +155,51 @@ class ProviderRegistry {
     return allModels;
   }
 
+  /**
+   * Get fallback provider when active provider fails.
+   * Returns the next healthy provider in the fallback chain.
+   */
+  getFallbackProvider(failedProviderId: ProviderId): AIProvider | null {
+    const candidates = FALLBACK_ORDER.filter(id => id !== failedProviderId);
+    
+    for (const id of candidates) {
+      const provider = this.providers.get(id);
+      if (provider && provider.hasApiKey() && provider.isHealthy()) {
+        logger.info('providers', `Fallback from ${failedProviderId} to ${provider.name}`);
+        return provider;
+      }
+    }
+
+    // If no healthy fallback, try any provider with a key
+    for (const id of candidates) {
+      const provider = this.providers.get(id);
+      if (provider && provider.hasApiKey()) {
+        logger.info('providers', `Fallback (unverified) from ${failedProviderId} to ${provider.name}`);
+        return provider;
+      }
+    }
+
+    return null;
+  }
+
+  /**
+   * Get health status for all providers.
+   */
+  async getHealthStatus(): Promise<Array<{ id: ProviderId; name: string; health: ProviderHealth }>> {
+    const statuses: Array<{ id: ProviderId; name: string; health: ProviderHealth }> = [];
+    
+    for (const provider of this.providers.values()) {
+      const health = provider.getHealth();
+      statuses.push({
+        id: provider.id,
+        name: provider.name,
+        health,
+      });
+    }
+
+    return statuses;
+  }
+
   setActiveProvider(providerId: ProviderId): void {
     this.activeProvider = providerId;
     logger.info('providers', `Active provider set to ${providerId}`);
@@ -134,7 +218,7 @@ class ProviderRegistry {
     return this.activeModel;
   }
 
-  getStatus(): Array<{ id: ProviderId; name: string; hasKey: boolean; maskedKey?: string }> {
+  getStatus(): Array<{ id: ProviderId; name: string; hasKey: boolean; maskedKey?: string; healthy?: boolean }> {
     return this.getAllProviders().map(p => {
       const keyStatus = credentialStore.get(p.id);
       return {
@@ -142,6 +226,7 @@ class ProviderRegistry {
         name: p.name,
         hasKey: keyStatus !== null,
         maskedKey: keyStatus ? credentialStore.maskKey(keyStatus) : undefined,
+        healthy: p.isHealthy(),
       };
     });
   }

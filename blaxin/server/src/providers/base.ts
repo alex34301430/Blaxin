@@ -2,6 +2,73 @@ import { AIRequest, AIResponse, ChatMessage, ModelInfo, ProviderId, ToolCall } f
 import { credentialStore } from '../utils/credentials.js';
 import { logger } from '../utils/logger.js';
 
+// ── Provider Health ─────────────────────────────────────────────
+
+export interface ProviderHealth {
+  healthy: boolean;
+  lastCheck: number;
+  latencyMs?: number;
+  error?: string;
+  consecutiveFailures: number;
+}
+
+// ── Retry Helper ────────────────────────────────────────────────
+
+export async function withRetry<T>(
+  fn: () => Promise<T>,
+  options: {
+    maxRetries?: number;
+    baseDelayMs?: number;
+    maxDelayMs?: number;
+    retryableErrors?: string[];
+  } = {},
+): Promise<T> {
+  const { maxRetries = 2, baseDelayMs = 1000, maxDelayMs = 10000, retryableErrors = [] } = options;
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error: any) {
+      const msg = error?.message || String(error);
+      const isRetryable = retryableErrors.some(e => msg.toLowerCase().includes(e.toLowerCase())) ||
+        msg.includes('429') || msg.includes('502') || msg.includes('503') || msg.includes('ECONNRESET');
+      
+      if (attempt === maxRetries || !isRetryable) {
+        throw error;
+      }
+
+      const delay = Math.min(baseDelayMs * Math.pow(2, attempt), maxDelayMs);
+      logger.warn('provider', `Retry ${attempt + 1}/${maxRetries} after ${delay}ms: ${msg.slice(0, 100)}`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  throw new Error('Unreachable');
+}
+
+// ── Fetch with Timeout ──────────────────────────────────────────
+
+export async function fetchWithTimeout(
+  url: string,
+  options: RequestInit & { timeoutMs?: number } = {},
+): Promise<Response> {
+  const { timeoutMs = 30000, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, { ...fetchOptions, signal: controller.signal });
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeoutMs}ms`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// ── Base Provider ───────────────────────────────────────────────
+
 export abstract class AIProvider {
   abstract readonly id: ProviderId;
   abstract readonly name: string;
@@ -9,6 +76,11 @@ export abstract class AIProvider {
   abstract readonly apiKeyRequired: boolean;
 
   protected apiKey: string | null = null;
+  private health: ProviderHealth = {
+    healthy: false,
+    lastCheck: 0,
+    consecutiveFailures: 0,
+  };
 
   async initialize(): Promise<void> {
     this.apiKey = credentialStore.get(this.id);
@@ -30,13 +102,45 @@ export abstract class AIProvider {
     return this.apiKey !== null && this.apiKey.length > 0;
   }
 
+  getHealth(): ProviderHealth {
+    return { ...this.health };
+  }
+
+  isHealthy(): boolean {
+    return this.health.healthy;
+  }
+
+  async healthCheck(): Promise<ProviderHealth> {
+    const start = Date.now();
+    try {
+      const result = await this.validateKey(this.apiKey || '');
+      this.health = {
+        healthy: result.valid,
+        lastCheck: Date.now(),
+        latencyMs: Date.now() - start,
+        error: result.error,
+        consecutiveFailures: result.valid ? 0 : this.health.consecutiveFailures + 1,
+      };
+    } catch (error: any) {
+      this.health = {
+        healthy: false,
+        lastCheck: Date.now(),
+        latencyMs: Date.now() - start,
+        error: error.message,
+        consecutiveFailures: this.health.consecutiveFailures + 1,
+      };
+    }
+    return this.health;
+  }
+
   async validateKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
     try {
-      const response = await fetch(`${this.baseUrl}/models`, {
+      const response = await fetchWithTimeout(`${this.baseUrl}/models`, {
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
+        timeoutMs: 10000,
       });
       if (response.ok) {
         return { valid: true };
@@ -57,6 +161,9 @@ export abstract class AIProvider {
       }
       if (error?.cause?.code === 'ECONNREFUSED') {
         return { valid: false, error: 'Connection refused. The provider server is not responding.' };
+      }
+      if (error.message?.includes('timed out')) {
+        return { valid: false, error: 'Connection timed out. The provider may be unreachable.' };
       }
       return { valid: false, error: `Network error: ${error?.message || 'Unknown error'}` };
     }
@@ -93,6 +200,9 @@ export abstract class AIProvider {
     }
     if (msg.includes('500') || msg.includes('502') || msg.includes('503')) {
       throw new ProviderError('Provider server error. The service may be temporarily unavailable.', 'SERVER_ERROR', this.id);
+    }
+    if (msg.includes('timed out') || msg.includes('abort')) {
+      throw new ProviderError('Request timed out. The provider may be slow or unreachable.', 'TIMEOUT', this.id);
     }
     
     throw new ProviderError(`Error in ${context}: ${msg}`, 'UNKNOWN', this.id);
