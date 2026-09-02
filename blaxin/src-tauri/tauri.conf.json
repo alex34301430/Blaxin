@@ -59,7 +59,7 @@
       "endpoints": [
         "https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/update/latest.json"
       ],
-      "pubkey": "RWQdUBByv6OCkX7XeAjzYn7TDuHL4w3tgbhr0Nm04ed0NQBPPphW2N2C",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDNCOUFBREM3MzJFOUUwQUEKUldTcTRPa3l4NjJhTzRXeDJZc0sydkxMOC9JYnQ5UWJPdi9HUnp6VXRNY1ZlQ3ZVL0s4QktWZW8K",
       "windows": {
         "title": "BLAXIN Updater"
       }

@@ -194,20 +194,27 @@ jobs:
             echo "Found .deb: $(basename $DEB)"
           fi
 
-          # Find and copy update archive and signature
-          TAR_GZ=$(find blaxin/src-tauri/target -name "*.tar.gz" -not -name "*.AppImage.tar.gz" | head -1)
+          # Find and copy the Tauri update archive (NOT control.tar.gz from .deb)
+          # Tauri produces update archives named like <appname>_<version>_x86_64.tar.gz
+          TAR_GZ=$(find blaxin/src-tauri/target -name "blaxin_*_x86_64.tar.gz" -not -name "*.AppImage.tar.gz" | head -1)
           if [ -z "$TAR_GZ" ]; then
-            TAR_GZ=$(find blaxin/src-tauri/target -name "*.AppImage.tar.gz" | head -1)
+            TAR_GZ=$(find blaxin/src-tauri/target -name "*.tar.gz" -not -name "control.tar.gz" -not -name "*.AppImage.tar.gz" | head -1)
           fi
           if [ -n "$TAR_GZ" ]; then
             cp "$TAR_GZ" artifacts/
             echo "Found update archive: $(basename $TAR_GZ)"
+          else
+            echo "WARNING: No update archive found (auto-updates will not work)"
           fi
 
+          # Find and copy signature (only produced if TAURI_SIGNING_PRIVATE_KEY is set)
           SIG=$(find blaxin/src-tauri/target -name "*.sig" | head -1)
           if [ -n "$SIG" ]; then
             cp "$SIG" artifacts/
             echo "Found signature: $(basename $SIG)"
+          else
+            echo "WARNING: No signature file found. Auto-update verification will not work."
+            echo "Make sure TAURI_SIGNING_PRIVATE_KEY is set in repository secrets."
           fi
 
           echo "=== All artifacts ==="
@@ -216,7 +223,14 @@ jobs:
       - name: Generate checksums
         working-directory: artifacts
         run: |
-          for f in *.AppImage *.deb *.tar.gz; do
+          for f in *.AppImage *.deb; do
+            if [ -f "$f" ]; then
+              sha256sum "$f" > "$f.sha256"
+              echo "Checksum: $(cat $f.sha256)"
+            fi
+          done
+          # Checksum for update archive (if it exists)
+          for f in BLAXIN_*.tar.gz; do
             if [ -f "$f" ]; then
               sha256sum "$f" > "$f.sha256"
               echo "Checksum: $(cat $f.sha256)"
@@ -229,14 +243,45 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           VERSION_NUM="${{ steps.version.outputs.version_num }}"
 
-          # Find the update archive
-          TAR_FILE=$(ls artifacts/*.tar.gz 2>/dev/null | head -1)
+          # Find the Tauri update archive (NOT control.tar.gz)
+          # Must match the naming pattern: BLAXIN_<version>_x86_64.tar.gz or blaxin_<version>_x86_64.tar.gz
+          TAR_FILE=""
+          for candidate in artifacts/BLAXIN_*_x86_64.tar.gz artifacts/blaxin_*_x86_64.tar.gz; do
+            if [ -f "$candidate" ]; then
+              TAR_FILE="$candidate"
+              break
+            fi
+          done
+
+          # Fallback: any tar.gz that is NOT control.tar.gz
+          if [ -z "$TAR_FILE" ]; then
+            for candidate in artifacts/*.tar.gz; do
+              if [ -f "$candidate" ] && [[ "$(basename $candidate)" != control.tar.gz ]]; then
+                TAR_FILE="$candidate"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "$TAR_FILE" ]; then
+            echo "ERROR: No update archive found! Cannot generate latest.json."
+            echo "Available files:"
+            ls -la artifacts/
+            exit 1
+          fi
+
+          echo "Using update archive: $TAR_FILE"
+
+          # Find signature file
           SIG_FILE=$(ls artifacts/*.sig 2>/dev/null | head -1)
 
           # Read signature content
           SIG_CONTENT=""
           if [ -n "$SIG_FILE" ] && [ -f "$SIG_FILE" ]; then
             SIG_CONTENT=$(cat "$SIG_FILE")
+            echo "Signature found and included"
+          else
+            echo "WARNING: No signature file found. Update verification will rely on HTTPS only."
           fi
 
           # Get download URL for the update archive
@@ -308,6 +353,9 @@ jobs:
           echo "=== Files in artifacts/ ==="
           ls -la
 
+          # Remove any stale or unwanted artifacts (control.tar.gz from .deb build)
+          rm -f control.tar.gz control.tar.gz.sha256 2>/dev/null || true
+
           # Rename AppImage
           for f in *.AppImage; do
             if [ -f "$f" ]; then
@@ -316,11 +364,14 @@ jobs:
                 mv "$f" "$NEW_NAME"
                 echo "Renamed: $f -> $NEW_NAME"
               fi
-              # Update checksum
-              sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256" 2>/dev/null || true
-              rm -f "*.AppImage.sha256" 2>/dev/null || true
             fi
           done
+
+          # Remove old AppImage checksums and regenerate
+          rm -f *.AppImage.sha256 2>/dev/null || true
+          if [ -f "BLAXIN_${VERSION}_amd64.AppImage" ]; then
+            sha256sum "BLAXIN_${VERSION}_amd64.AppImage" > "BLAXIN_${VERSION}_amd64.AppImage.sha256"
+          fi
 
           # Rename .deb
           for f in *.deb; do
@@ -330,23 +381,31 @@ jobs:
                 mv "$f" "$NEW_NAME"
                 echo "Renamed: $f -> $NEW_NAME"
               fi
-              sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256" 2>/dev/null || true
-              rm -f "*.deb.sha256" 2>/dev/null || true
             fi
           done
 
-          # Rename tar.gz
-          for f in *.tar.gz; do
+          # Remove old deb checksums and regenerate
+          rm -f *.deb.sha256 2>/dev/null || true
+          if [ -f "blaxin_${VERSION}_amd64.deb" ]; then
+            sha256sum "blaxin_${VERSION}_amd64.deb" > "blaxin_${VERSION}_amd64.deb.sha256"
+          fi
+
+          # Rename tar.gz (the Tauri update archive only)
+          for f in BLAXIN_*.tar.gz blaxin_*.tar.gz; do
             if [ -f "$f" ]; then
               NEW_NAME="BLAXIN_${VERSION}_x86_64.tar.gz"
               if [ "$f" != "$NEW_NAME" ]; then
                 mv "$f" "$NEW_NAME"
                 echo "Renamed: $f -> $NEW_NAME"
               fi
-              sha256sum "$NEW_NAME" > "${NEW_NAME}.sha256" 2>/dev/null || true
-              rm -f "*.tar.gz.sha256" 2>/dev/null || true
             fi
           done
+
+          # Remove old tar.gz checksums and regenerate
+          rm -f *.tar.gz.sha256 2>/dev/null || true
+          if [ -f "BLAXIN_${VERSION}_x86_64.tar.gz" ]; then
+            sha256sum "BLAXIN_${VERSION}_x86_64.tar.gz" > "BLAXIN_${VERSION}_x86_64.tar.gz.sha256"
+          fi
 
           # Rename sig
           for f in *.sig; do

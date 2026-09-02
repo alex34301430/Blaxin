@@ -28,3 +28,6 @@ Thumbs.db
 
 # TypeScript
 *.tsbuildinfo
+
+# Secrets (NEVER commit)
+blaxin/.secrets/
