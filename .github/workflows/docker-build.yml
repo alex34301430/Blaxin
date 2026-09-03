@@ -95,7 +95,7 @@ jobs:
 
       # ── Vulnerability scanning ─────────────────────────────────
       - name: Run Trivy vulnerability scanner — server
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: blaxin-server:scan
           format: table
@@ -104,7 +104,7 @@ jobs:
         continue-on-error: true
 
       - name: Run Trivy vulnerability scanner — client
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: blaxin-client:scan
           format: table
@@ -113,7 +113,7 @@ jobs:
         continue-on-error: true
 
       - name: Run Trivy vulnerability scanner — nginx
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: blaxin-nginx:scan
           format: table
@@ -123,7 +123,7 @@ jobs:
 
       # ── SARIF reports (GitHub Security tab) ────────────────────
       - name: Run Trivy scanner (SARIF) — server
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: blaxin-server:scan
           format: sarif
@@ -132,7 +132,7 @@ jobs:
         continue-on-error: true
 
       - name: Run Trivy scanner (SARIF) — client
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: blaxin-client:scan
           format: sarif
@@ -141,7 +141,7 @@ jobs:
         continue-on-error: true
 
       - name: Run Trivy scanner (SARIF) — nginx
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: blaxin-nginx:scan
           format: sarif
