@@ -11,14 +11,39 @@ import { loadConfig, saveConfig } from './utils/config.js';
 import { credentialStore } from './utils/credentials.js';
 import { runDiagnostics } from './utils/diagnostics.js';
 import { sessionState } from './utils/session-state.js';
+import { memoryStore } from './utils/memory.js';
+import {
+  corsOriginValidator,
+  getAllowedOriginsFromEnv,
+  isOriginAllowed,
+  isStateChangingRequestAllowed,
+} from './utils/security.js';
+import { isVersionNewer, isMajorVersionUpgrade } from './utils/semver.js';
 import { APP_VERSION, GITHUB_REPO, GITHUB_RELEASES_URL } from './utils/version.js';
 import { ProviderId, AppConfig } from './types.js';
 
 const PORT = parseInt(process.env.PORT || '3001');
+const HOST = process.env.BLAXIN_HOST || '0.0.0.0';
+const EXTRA_ALLOWED_ORIGINS = getAllowedOriginsFromEnv();
+
 const app = express();
 
-app.use(cors());
-app.use(express.json());
+// CORS: allow only trusted origins (see utils/security.ts). Browsers from
+// other origins cannot send state-changing requests or read responses.
+app.use(cors({ origin: corsOriginValidator(EXTRA_ALLOWED_ORIGINS) }));
+app.use(express.json({ limit: '5mb' }));
+
+// Belt-and-braces origin check for state-changing requests (the CORS layer
+// stops browsers from reading responses, this stops the request itself).
+// See isStateChangingRequestAllowed in utils/security.ts for the policy.
+app.use('/api', (req, res, next) => {
+  const origin = req.headers.origin as string | undefined;
+  if (isStateChangingRequestAllowed(req.method, origin, EXTRA_ALLOWED_ORIGINS)) {
+    return next();
+  }
+  logger.warn('security', `Blocked ${req.method} ${req.path} from origin ${origin || '(none)'}`);
+  res.status(403).json({ error: 'Origin not allowed' });
+});
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -41,16 +66,13 @@ app.get('/api/update/check', async (_req, res) => {
     }
     
     const release = await response.json() as any;
-    const latestVersion = release.tag_name?.replace(/^v/, '') || '';
-    const updateAvailable = latestVersion && latestVersion !== APP_VERSION;
-    
-    // Compare versions semantically
-    let majorUpdate = false;
-    if (updateAvailable && latestVersion && APP_VERSION) {
-      const curr = APP_VERSION.split('.').map(Number);
-      const latest = latestVersion.split('.').map(Number);
-      if (latest[0] > curr[0]) majorUpdate = true;
-    }
+    const latestVersion = (release.tag_name || '').replace(/^v/, '');
+
+    // Semantic comparison: an update is only offered when the remote
+    // release is strictly newer than the running version (a local build
+    // that is ahead of the last tag must not be told to "downgrade").
+    const updateAvailable = !!latestVersion && isVersionNewer(latestVersion, APP_VERSION);
+    const majorUpdate = updateAvailable && isMajorVersionUpgrade(latestVersion, APP_VERSION);
     
     // Find Linux assets (AppImage, .deb, .sig)
     const allAssets = release.assets || [];
@@ -110,18 +132,20 @@ app.post('/api/providers/:id/validate', async (req, res) => {
     const result = await providers.validateKey(id as ProviderId, apiKey);
     res.json(result);
   } catch (error: any) {
-    res.json({ valid: false, error: error.message });
+    res.json({ valid: false, error: error.message, code: 'UNKNOWN' });
   }
 });
 
 app.post('/api/providers/:id/save-key', async (req, res) => {
   const { id } = req.params;
-  const { apiKey } = req.body;
+  const { apiKey, skipValidation } = req.body || {};
   try {
-    const result = await providers.saveKey(id as ProviderId, apiKey);
+    const result = await providers.saveKey(id as ProviderId, apiKey, {
+      skipValidation: skipValidation === true,
+    });
     res.json(result);
   } catch (error: any) {
-    res.json({ valid: false, error: error.message });
+    res.json({ valid: false, error: error.message, code: 'UNKNOWN' });
   }
 });
 
@@ -221,14 +245,67 @@ app.get('/api/agent/history', (_req, res) => {
   res.json(orchestrator.getConversationHistory());
 });
 
+// Memory endpoints
+app.get('/api/memory', (req, res) => {
+  const query = (req.query.q as string) || undefined;
+  const type = (req.query.type as string) || undefined;
+  const entries = memoryStore.search(query, (type as any) || undefined);
+  res.json(entries);
+});
+
+app.delete('/api/memory/:id', (req, res) => {
+  const removed = memoryStore.remove(req.params.id);
+  res.json({ success: removed });
+});
+
+app.delete('/api/memory', (_req, res) => {
+  memoryStore.clear();
+  res.json({ success: true });
+});
+
 // Create HTTP server
 const server = createServer(app);
 
-// WebSocket server (agent)
-const wss = new WebSocketServer({ server, path: '/ws', perMessageDeflate: false, maxPayload: 10 * 1024 * 1024 });
+// WebSocket servers are upgrade-routed so we can validate the Origin of
+// every connection BEFORE the 101 Switching Protocols handshake completes.
+const wss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 10 * 1024 * 1024 });
+const terminalWss = new WebSocketServer({ noServer: true, perMessageDeflate: false, maxPayload: 5 * 1024 * 1024 });
 
-// WebSocket server (terminal)
-const terminalWss = new WebSocketServer({ server, path: '/ws/terminal', perMessageDeflate: false, maxPayload: 5 * 1024 * 1024 });
+function handleUpgrade(
+  target: WebSocketServer,
+  request: import('http').IncomingMessage,
+  socket: import('stream').Duplex,
+  head: Buffer,
+  label: string,
+): void {
+  const origin = (request.headers.origin as string | undefined) || undefined;
+  if (!isOriginAllowed(origin, EXTRA_ALLOWED_ORIGINS)) {
+    logger.warn('security', `Blocked ${label} WebSocket upgrade from origin ${origin || '(none)'}`);
+    socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
+    socket.destroy();
+    return;
+  }
+  target.handleUpgrade(request, socket, head, (ws) => {
+    target.emit('connection', ws, request);
+  });
+}
+
+server.on('upgrade', (request, socket, head) => {
+  let pathname = '';
+  try {
+    pathname = new URL(request.url || '/', 'http://localhost').pathname;
+  } catch {
+    socket.destroy();
+    return;
+  }
+  if (pathname === '/ws') {
+    handleUpgrade(wss, request, socket, head, 'agent');
+  } else if (pathname === '/ws/terminal') {
+    handleUpgrade(terminalWss, request, socket, head, 'terminal');
+  } else {
+    socket.destroy();
+  }
+});
 
 // Broadcast orchestrator events to ALL connected clients
 orchestrator.setEventCallback((event, data) => {
@@ -260,6 +337,9 @@ wss.on('connection', (ws) => {
         case 'ping':
           ws.send(JSON.stringify({ event: 'pong', data: { timestamp: Date.now() } }));
           break;
+        case 'confirmation-response':
+          orchestrator.respondToConfirmation(msg.data?.stepId, msg.data?.approved === true);
+          break;
       }
     } catch (error: any) {
       logger.error('websocket', 'Message handling error', error);
@@ -281,6 +361,7 @@ wss.on('connection', (ws) => {
       state: orchestrator.getState(),
       activeProvider: providers.getActiveProvider(),
       activeModel: providers.getActiveModel(),
+      description: orchestrator.getCurrentDescription(),
     },
   }));
 });
@@ -292,8 +373,8 @@ terminalWss.on('connection', (ws) => {
 });
 
 // Start server
-server.listen(PORT, '0.0.0.0', async () => {
-  logger.info('server', `BLAXIN server running on http://localhost:${PORT}`);
+server.listen(PORT, HOST, async () => {
+  logger.info('server', `BLAXIN server running on http://${HOST}:${PORT}`);
   
   // Initialize providers
   await providers.initializeAll();

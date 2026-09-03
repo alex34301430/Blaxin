@@ -1,10 +1,10 @@
 import { ProviderId, ProviderCredentials } from '../types.js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join } from 'path';
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from 'crypto';
 import { hostname, userInfo } from 'os';
+import { dataPath } from './paths.js';
 
-const CREDENTIALS_FILE = join(process.cwd(), '.blaxin-credentials');
+const CREDENTIALS_FILE = dataPath('.blaxin-credentials');
 const ENCRYPTION_KEY_ENV = 'BLAXIN_SECRET';
 
 function getEncryptionKey(): Buffer {

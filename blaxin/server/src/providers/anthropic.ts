@@ -1,5 +1,6 @@
 import { AIRequest, AIResponse, ModelInfo } from '../types.js';
 import { AIProvider } from './base.js';
+import { toAnthropicMessages } from './messages.js';
 import { logger } from '../utils/logger.js';
 
 export class AnthropicProvider extends AIProvider {
@@ -24,21 +25,16 @@ export class AnthropicProvider extends AIProvider {
   async chat(request: AIRequest): Promise<AIResponse> {
     if (!this.apiKey) throw new Error('API key required');
 
-    // Extract system message
-    const systemMsg = request.messages.find(m => m.role === 'system');
-    const nonSystemMsgs = request.messages.filter(m => m.role !== 'system');
+    const { system, messages } = toAnthropicMessages(request.messages);
 
     const body: any = {
       model: request.model,
       max_tokens: request.maxTokens || 4096,
-      messages: nonSystemMsgs.map(m => ({
-        role: m.role,
-        content: m.content,
-      })),
+      messages,
     };
 
-    if (systemMsg) {
-      body.system = systemMsg.content;
+    if (system) {
+      body.system = system;
     }
 
     if (request.tools && request.tools.length > 0) {

@@ -1,6 +1,70 @@
 import { Tool, ToolResult } from '../types.js';
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, renameSync } from 'fs';
-import { join, dirname } from 'path';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, statSync, unlinkSync, renameSync, realpathSync } from 'fs';
+import { join, dirname, resolve, parse } from 'path';
+import { homedir } from 'os';
+import { logger } from '../utils/logger.js';
+
+// Paths BLAXIN refuses to mutate. These are system-critical or hold
+// credentials. Reads remain possible; destructive/write operations are
+// blocked even when the user is prompted, because mistakes here are
+// unrecoverable and these paths are never legitimate write targets for
+// a desktop assistant.
+const PROTECTED_ROOTS = [
+  '/etc', '/usr', '/boot', '/bin', '/sbin', '/lib', '/lib64',
+  '/proc', '/sys', '/dev', '/run', '/root', '/srv',
+  '/var/lib', '/var/cache', '/var/log', '/var/backups', '/var/spool',
+];
+
+const PROTECTED_HOME_DIRS = [
+  '.ssh', '.gnupg', '.aws', '.kube', '.config/rclone', '.password-store',
+  '.local/share/keyrings', '.mozilla', '.config/google-chrome',
+  '.config/chromium', '.config/BraveSoftware', '.docker',
+];
+
+const SENSITIVE_FILE_NAMES = [
+  '.blaxin-credentials', '.netrc', '.npmrc', '.pypirc',
+  'id_rsa', 'id_dsa', 'id_ecdsa', 'id_ed25519',
+  'credentials', 'credentials.json',
+];
+
+function isProtectedPath(filePath: string): boolean {
+  let abs = resolve(filePath);
+  try {
+    if (existsSync(abs)) abs = realpathSync(abs);
+  } catch { /* keep resolved path */ }
+
+  const { dir, base } = parse(abs);
+  const loweredBase = base.toLowerCase();
+
+  // Sensitive file names anywhere in the tree
+  if (SENSITIVE_FILE_NAMES.includes(base)) return true;
+  if (/^id_(rsa|dsa|ecdsa|ed25519)$/.test(base)) return true;
+  if (!base.endsWith('.pub') && (
+    loweredBase.endsWith('.pem') ||
+    loweredBase.endsWith('.key') ||
+    loweredBase.endsWith('.p12') ||
+    loweredBase.endsWith('.pfx') ||
+    loweredBase.endsWith('.kdbx')
+  )) {
+    return true;
+  }
+
+  // Protected system roots
+  if (PROTECTED_ROOTS.some((root) => abs === root || abs.startsWith(root + '/'))) {
+    return true;
+  }
+
+  // Protected home subdirectories (credentials, browser profiles)
+  const home = homedir();
+  if (home && (abs === home || abs.startsWith(home + '/'))) {
+    const rel = abs.slice(home.length + 1);
+    if (PROTECTED_HOME_DIRS.some((d) => rel === d || rel.startsWith(d + '/'))) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 export class FileSystemTool implements Tool {
   name = 'filesystem';
@@ -43,6 +107,24 @@ export class FileSystemTool implements Tool {
 
     if (!operation || !filePath) {
       return { success: false, output: '', error: 'Operation and path are required' };
+    }
+
+    const destructive = ['delete', 'write', 'rename'].includes(operation);
+    if (destructive && isProtectedPath(filePath)) {
+      logger.warn('filesystem', `Blocked ${operation} on protected path: ${filePath}`);
+      return {
+        success: false,
+        output: '',
+        error: `BLAXIN protects ${filePath} from ${operation}. This path is system-critical or holds credentials. Use the terminal with care only if you are sure.`,
+      };
+    }
+    if (operation === 'rename' && args.newPath && isProtectedPath(args.newPath as string)) {
+      logger.warn('filesystem', `Blocked rename to protected path: ${args.newPath}`);
+      return {
+        success: false,
+        output: '',
+        error: `BLAXIN protects ${args.newPath} from being a rename target. This path is system-critical or holds credentials.`,
+      };
     }
 
     try {

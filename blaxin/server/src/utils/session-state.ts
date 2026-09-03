@@ -1,6 +1,6 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync, statSync } from 'fs';
-import { join } from 'path';
 import { logger } from './logger.js';
+import { dataPath } from './paths.js';
 
 // ── Session State Types ─────────────────────────────────────────
 
@@ -28,8 +28,8 @@ interface SessionState {
 
 // ── State Manager ───────────────────────────────────────────────
 
-const STATE_DIR = join(process.cwd(), '.blaxin-state');
-const STATE_FILE = join(STATE_DIR, 'session.json');
+const STATE_DIR = dataPath('.blaxin-state');
+const STATE_FILE = dataPath('.blaxin-state', 'session.json');
 const MAX_HISTORY_SIZE = 100; // Maximum messages to persist
 const AUTO_SAVE_INTERVAL_MS = 30000; // Auto-save every 30 seconds
 const MAX_STATE_FILE_SIZE = 10 * 1024 * 1024; // 10MB max state file

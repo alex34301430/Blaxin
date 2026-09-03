@@ -1,6 +1,7 @@
 import { AIRequest, AIResponse, ChatMessage, ModelInfo, ProviderId, ToolCall } from '../types.js';
 import { credentialStore } from '../utils/credentials.js';
 import { logger } from '../utils/logger.js';
+import { toOpenAICompatibleMessages } from './messages.js';
 
 // ── Provider Health ─────────────────────────────────────────────
 
@@ -10,6 +11,61 @@ export interface ProviderHealth {
   latencyMs?: number;
   error?: string;
   consecutiveFailures: number;
+}
+
+// ── Validation Result Codes ─────────────────────────────────────
+
+export type KeyValidationCode =
+  | 'BAD_FORMAT'      // structurally invalid input (no network call made)
+  | 'INVALID_KEY'     // provider rejected the key (401)
+  | 'FORBIDDEN'       // provider denied access (403)
+  | 'RATE_LIMIT'      // provider rate limited the check (429)
+  | 'NETWORK'         // provider could not be reached
+  | 'TIMEOUT'         // request to the provider timed out
+  | 'SERVER_ERROR'    // provider returned a 5xx
+  | 'UNKNOWN';        // anything else
+
+export interface ValidateKeyResult {
+  valid: boolean;
+  error?: string;
+  code?: KeyValidationCode;
+}
+
+/** Classify an HTTP status returned while validating a key. */
+export function classifyKeyHttpStatus(status: number): { code: KeyValidationCode; error: string } {
+  if (status === 401) {
+    return { code: 'INVALID_KEY', error: 'Authentication failed. The API key is invalid or has been revoked.' };
+  }
+  if (status === 403) {
+    return { code: 'FORBIDDEN', error: 'Access denied. The API key may not have permission for this resource.' };
+  }
+  if (status === 429) {
+    return { code: 'RATE_LIMIT', error: 'Rate limited. Too many requests. Please wait and try again.' };
+  }
+  if (status >= 500) {
+    return { code: 'SERVER_ERROR', error: `The provider server returned an error (HTTP ${status}). Please try again later.` };
+  }
+  if (status === 404) {
+    return { code: 'UNKNOWN', error: `Validation failed with status ${status}.` };
+  }
+  return { code: 'UNKNOWN', error: `Validation failed with status ${status}.` };
+}
+
+/** Classify a network/transport error thrown while validating a key. */
+export function classifyKeyNetworkError(error: any): { code: KeyValidationCode; error: string } {
+  const causeCode = error?.cause?.code as string | undefined;
+  const msg: string = error?.message || String(error);
+
+  if (causeCode === 'ENOTFOUND') {
+    return { code: 'NETWORK', error: 'Network failure. Unable to reach the provider server. Check your internet connection.' };
+  }
+  if (causeCode === 'ECONNREFUSED') {
+    return { code: 'NETWORK', error: 'Connection refused. The provider server is not responding.' };
+  }
+  if (msg.includes('timed out') || causeCode === 'ETIMEDOUT') {
+    return { code: 'TIMEOUT', error: 'Connection timed out. The provider may be unreachable or slow.' };
+  }
+  return { code: 'NETWORK', error: `Network error: ${msg}` };
 }
 
 // ── Retry Helper ────────────────────────────────────────────────
@@ -133,7 +189,7 @@ export abstract class AIProvider {
     return this.health;
   }
 
-  async validateKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
+  async validateKey(apiKey: string): Promise<ValidateKeyResult> {
     try {
       const response = await fetchWithTimeout(`${this.baseUrl}/models`, {
         headers: {
@@ -145,27 +201,14 @@ export abstract class AIProvider {
       if (response.ok) {
         return { valid: true };
       }
-      if (response.status === 401) {
-        return { valid: false, error: 'Authentication failed. The API key is invalid or has been revoked.' };
-      }
-      if (response.status === 403) {
-        return { valid: false, error: 'Access denied. The API key may not have permission for this resource.' };
-      }
-      if (response.status === 429) {
-        return { valid: false, error: 'Rate limited. Too many requests. Please wait and try again.' };
-      }
-      return { valid: false, error: `Validation failed with status ${response.status}` };
+      const classified = classifyKeyHttpStatus(response.status);
+      return { valid: false, ...classified };
     } catch (error: any) {
-      if (error?.cause?.code === 'ENOTFOUND') {
-        return { valid: false, error: 'Network failure. Unable to reach the provider server. Check your internet connection.' };
+      if (error?.name === 'AbortError' || String(error?.message || '').includes('timed out')) {
+        return { valid: false, code: 'TIMEOUT', error: 'Connection timed out. The provider may be unreachable or slow.' };
       }
-      if (error?.cause?.code === 'ECONNREFUSED') {
-        return { valid: false, error: 'Connection refused. The provider server is not responding.' };
-      }
-      if (error.message?.includes('timed out')) {
-        return { valid: false, error: 'Connection timed out. The provider may be unreachable.' };
-      }
-      return { valid: false, error: `Network error: ${error?.message || 'Unknown error'}` };
+      const classified = classifyKeyNetworkError(error);
+      return { valid: false, ...classified };
     }
   }
 
@@ -180,10 +223,9 @@ export abstract class AIProvider {
   }
 
   protected formatMessages(request: AIRequest): any[] {
-    return request.messages.map(m => ({
-      role: m.role,
-      content: m.content,
-    }));
+    // OpenAI-compatible wire format (used by OpenAI, OpenRouter, Groq,
+    // Together). Handles assistant tool_calls + tool results correctly.
+    return toOpenAICompatibleMessages(request.messages);
   }
 
   protected handleError(error: any, context: string): never {
@@ -195,7 +237,7 @@ export abstract class AIProvider {
     if (msg.includes('429') || msg.includes('Rate limit')) {
       throw new ProviderError('Rate limit exceeded. Please wait before trying again.', 'RATE_LIMIT', this.id);
     }
-    if (msg.includes('ENOTFOUND') || msg.includes('network')) {
+    if (msg.includes('ENOTFOUND') || msg.includes('network') || msg.includes('fetch failed') || msg.includes('ECONNREFUSED') || msg.includes('ECONNRESET')) {
       throw new ProviderError('Network failure. Check your internet connection.', 'NETWORK_ERROR', this.id);
     }
     if (msg.includes('500') || msg.includes('502') || msg.includes('503')) {

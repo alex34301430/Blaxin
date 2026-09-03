@@ -8,6 +8,7 @@ import { toolRegistry } from '../tools/index.js';
 import { logger } from '../utils/logger.js';
 import { getConfig } from '../utils/config.js';
 import { sessionState } from '../utils/session-state.js';
+import { memoryStore } from '../utils/memory.js';
 
 type EventCallback = (event: string, data: any) => void;
 
@@ -95,11 +96,33 @@ export class AgentOrchestrator {
   private currentTask: AgentTask | null = null;
   private currentPlan: TaskPlan | null = null;
   private state: AgentState = 'idle';
+  private lastDescription: string | null = null;
   private eventCallback: EventCallback | null = null;
   private stepCount = 0;
   private consecutiveErrors = 0;
   private readonly MAX_CONSECUTIVE_ERRORS = 3;
   private readonly MAX_RETRIES_PER_STEP = 2;
+
+  // Concurrency: only one agent task executes at a time. Additional
+  // messages queue and run sequentially after the active task finishes.
+  private busy = false;
+  private pendingQueue: string[] = [];
+  private readonly MAX_QUEUE_SIZE = 10;
+
+  // Cancellation: stop() is honored at loop boundaries and aborts
+  // any pending confirmation request.
+  private stopRequested = false;
+
+  // Confirmation gate: high-impact tool calls wait for user approval.
+  private pendingConfirmations = new Map<string, (approved: boolean) => void>();
+  private readonly CONFIRMATION_TIMEOUT_MS = 120000;
+
+  // Loop detection: N consecutive identical successful tool actions
+  // indicate the agent is stuck repeating itself.
+  private repeatedActionCount = 0;
+  private lastActionFingerprint = '';
+  private loopAbortReason: string | null = null;
+  private readonly MAX_REPEATED_ACTIONS = 3;
 
   constructor() {
     // Restore conversation history from persisted state
@@ -122,11 +145,79 @@ export class AgentOrchestrator {
 
   private setState(state: AgentState, description?: string): void {
     this.state = state;
+    this.lastDescription = description ?? null;
     this.emit('agent-state', { state, description });
     logger.info('orchestrator', `State: ${state}${description ? ` - ${description}` : ''}`);
   }
 
+  /** Latest human-readable state description (for reconnect payloads). */
+  getCurrentDescription(): string | null {
+    return this.lastDescription;
+  }
+
+  /**
+   * Public entry point. Queues the message when another task is already
+   * running so concurrent requests can never interleave shared state.
+   */
   async processMessage(userMessage: string): Promise<void> {
+    if (this.busy) {
+      if (this.pendingQueue.length >= this.MAX_QUEUE_SIZE) {
+        this.emit('error', {
+          message: 'The task queue is full. Stop the current task or wait for it to finish.',
+          code: 'QUEUE_FULL',
+        });
+        return;
+      }
+      this.pendingQueue.push(userMessage);
+      this.emit('agent-state', {
+        state: 'waiting',
+        description: `Queued behind the current task (${this.pendingQueue.length} in queue)`,
+      });
+      return;
+    }
+
+    this.busy = true;
+    try {
+      await this.runTask(userMessage);
+    } finally {
+      this.busy = false;
+      this.stopRequested = false;
+    }
+
+    // Run anything that queued while this task was active.
+    const next = this.pendingQueue.shift();
+    if (next !== undefined) {
+      this.setState('waiting', 'Starting next queued task...');
+      // Defer to the next microtask so the caller can return.
+      setTimeout(() => { this.processMessage(next); }, 0);
+    }
+  }
+
+  /** True when a task (or queued work) is pending. */
+  isBusy(): boolean {
+    return this.busy || this.pendingQueue.length > 0;
+  }
+
+  /**
+   * Respond to a confirmation request from the agent UI.
+   * Approval grants one high-impact tool execution; denial skips it.
+   */
+  respondToConfirmation(stepId: string | undefined, approved: boolean): void {
+    if (!stepId) {
+      // Deny-all fallback if no specific step matches.
+      for (const [, resolve] of this.pendingConfirmations) resolve(false);
+      this.pendingConfirmations.clear();
+      return;
+    }
+    const resolve = this.pendingConfirmations.get(stepId);
+    if (resolve) {
+      this.pendingConfirmations.delete(stepId);
+      resolve(approved);
+      logger.info('orchestrator', `Confirmation response for ${stepId}: ${approved ? 'approved' : 'denied'}`);
+    }
+  }
+
+  private async runTask(userMessage: string): Promise<void> {
     const config = getConfig();
     const providerId = providers.getActiveProvider();
     const modelId = providers.getActiveModel();
@@ -159,18 +250,32 @@ export class AgentOrchestrator {
     sessionState.addMessage(userMsg);
     this.emit('agent-message', userMsg);
 
-    // Create task
+    // Create task + plan
+    const taskId = uuidv4();
     this.currentTask = {
-      id: uuidv4(),
+      id: taskId,
       instruction: userMessage,
       state: 'thinking',
       steps: [],
       currentStep: 0,
       startTime: Date.now(),
     };
+    this.currentPlan = {
+      id: uuidv4(),
+      objective: userMessage,
+      steps: [],
+      currentStepIndex: 0,
+      state: 'planning',
+      startTime: Date.now(),
+      verificationRequired: true,
+    };
 
     this.consecutiveErrors = 0;
-    this.setState('thinking', 'Analyzing your request...');
+    this.repeatedActionCount = 0;
+    this.lastActionFingerprint = '';
+    this.loopAbortReason = null;
+    this.stopRequested = false;
+    this.setState('planning', 'Planning the approach...');
     this.stepCount = 0;
 
     try {
@@ -186,7 +291,7 @@ export class AgentOrchestrator {
 
     if (this.currentTask) {
       this.currentTask.endTime = Date.now();
-      if (this.currentTask.state === 'thinking' || this.currentTask.state === 'executing') {
+      if (this.currentTask.state === 'thinking' || this.currentTask.state === 'planning' || this.currentTask.state === 'executing') {
         this.currentTask.state = 'completed';
       }
     }
@@ -197,6 +302,21 @@ export class AgentOrchestrator {
         this.currentPlan.state = 'completed';
       }
     }
+
+    // Record durable lessons: failed actions are remembered so future
+    // tasks can avoid repeating them. (Secrets are never stored.)
+    const taskSteps = this.currentTask?.steps || [];
+    const failedSteps = taskSteps.filter((s) => s.state === 'failed');
+    if (failedSteps.length > 0) {
+      const detail = failedSteps
+        .map((s) => `${s.description}: ${s.error || 'unknown error'}`)
+        .join('; ')
+        .slice(0, 1500);
+      memoryStore.add('action-result', `Task failed: ${userMessage} — ${detail}`, {
+        source: 'agent',
+        scope: 'failure',
+      });
+    }
   }
 
   private async executeLoop(
@@ -205,7 +325,7 @@ export class AgentOrchestrator {
     maxSteps: number,
     providerId?: ProviderId,
   ): Promise<void> {
-    while (this.stepCount < maxSteps) {
+    while (this.stepCount < maxSteps && !this.stopRequested && !this.loopAbortReason) {
       this.stepCount++;
 
       // Build messages for the AI with improved context management
@@ -231,12 +351,16 @@ export class AgentOrchestrator {
 
         // Handle tool calls
         if (response.toolCalls && response.toolCalls.length > 0) {
-          // Add assistant message with tool calls to history
+          // Add the assistant message — including its tool calls — to
+          // history. Providers require tool results to reference the
+          // originating assistant tool_calls, so this message must carry
+          // them when replayed on the next request.
           const assistantMsg: ChatMessage = {
             id: uuidv4(),
             role: 'assistant',
             content: response.message.content || '',
             timestamp: Date.now(),
+            toolCalls: this.limitToolCallsForHistory(response.toolCalls),
           };
           this.conversationHistory.push(assistantMsg);
           sessionState.addMessage(assistantMsg);
@@ -248,7 +372,27 @@ export class AgentOrchestrator {
 
           // Execute each tool call
           for (const toolCall of response.toolCalls) {
+            if (this.stopRequested || this.loopAbortReason) break;
             await this.executeToolCall(toolCall, provider, modelId, maxSteps);
+          }
+
+          if (this.loopAbortReason) {
+            const loopMsg: ChatMessage = {
+              id: uuidv4(),
+              role: 'assistant',
+              content: `I stopped because I appear to be repeating the same action without making progress: ${this.loopAbortReason}\n\n${this.getExecutionSummary()}`,
+              timestamp: Date.now(),
+            };
+            this.conversationHistory.push(loopMsg);
+            sessionState.addMessage(loopMsg);
+            this.emit('agent-message', loopMsg);
+            this.setState('completed', 'Stopped: repeated action detected');
+            return;
+          }
+
+          if (this.stopRequested) {
+            this.setState('idle', 'Stopped by user');
+            return;
           }
 
           // After tool execution, add an observation prompt
@@ -401,35 +545,64 @@ export class AgentOrchestrator {
       this.currentTask.steps.push(step);
       this.currentTask.currentStep = this.currentTask.steps.length;
     }
+    if (this.currentPlan) {
+      this.currentPlan.steps.push(step);
+      this.currentPlan.currentStepIndex = this.currentPlan.steps.length;
+      this.currentPlan.state = 'executing';
+    }
 
-    // Check if confirmation is needed
-    if (toolRegistry.requiresConfirmation(toolName, toolArgs)) {
+    // Check if confirmation is needed — and actually wait for the user's
+    // decision before executing. Denied actions are skipped, never run.
+    const config = getConfig();
+    if (config.agent.requireConfirmation && toolRegistry.requiresConfirmation(toolName, toolArgs)) {
+      const description = `Execute ${toolName}: ${step.description}`;
+      const actionJson = JSON.stringify({ tool: toolName, args: toolArgs });
       this.emit('confirmation-required', {
         taskId: this.currentTask?.id,
         stepId: toolCall.id,
-        description: `Execute ${toolName}: ${step.description}`,
-        action: JSON.stringify({ tool: toolName, args: toolArgs }),
+        description,
+        action: actionJson,
       });
       logger.info('orchestrator', `Confirmation required for ${toolName}`);
+
+      const approved = await this.requestConfirmation(toolCall.id, description, actionJson);
+      if (!approved) {
+        step.state = 'skipped';
+        step.result = 'Action denied by user.';
+        step.error = 'User denied the confirmation request.';
+        step.endTime = Date.now();
+        this.emit('tool-execution', {
+          toolName,
+          args: toolArgs,
+          state: 'skipped',
+          result: 'Denied by user',
+          stepId: step.id,
+        });
+        const deniedMsg: ChatMessage = {
+          id: uuidv4(),
+          role: 'tool',
+          content: `Tool error (${toolName}): The user denied permission for this action. Do not retry it; explain what was blocked and offer alternatives.`,
+          timestamp: Date.now(),
+          toolCallId: toolCall.id,
+          name: toolName,
+        };
+        this.conversationHistory.push(deniedMsg);
+        sessionState.addMessage(deniedMsg);
+        return;
+      }
     }
+
+    this.setState('executing', step.description);
 
     // Describe the action in user-friendly terms
     this.setState('executing', step.description);
     this.emit('tool-execution', { toolName, args: toolArgs, state: 'executing' });
     this.emit('activity', { type: 'executing', content: step.description });
 
-    // Add tool call to conversation
-    const toolMsg: ChatMessage = {
-      id: uuidv4(),
-      role: 'assistant',
-      content: '',
-      timestamp: Date.now(),
-      toolCallId: toolCall.id,
-    };
-    this.conversationHistory.push(toolMsg);
-    sessionState.addMessage(toolMsg);
-
-    // Execute the tool with retry for transient errors
+    // Execute the tool with retry for transient errors.
+    // (The assistant message carrying this tool call was already added to
+    // the history by the caller; here we only append the tool result, which
+    // pairs with the assistant's tool_calls when replayed.)
     let result = await toolRegistry.execute(toolName, toolArgs);
     let retries = 0;
 
@@ -456,6 +629,9 @@ export class AgentOrchestrator {
       result: result.output?.slice(0, 500),
       stepId: step.id,
     });
+    if (this.currentPlan && this.currentTask) {
+      this.emit('task-progress', { ...this.currentTask, steps: [...this.currentTask.steps] });
+    }
 
     // Add tool result to conversation
     const resultContent = result.success
@@ -484,6 +660,71 @@ export class AgentOrchestrator {
     }
 
     logger.info('orchestrator', `Tool ${toolName}: ${step.state} (${step.attempts} attempts, ${step.endTime! - step.startTime!}ms)`);
+
+    // Loop detection: flag identical consecutive successful actions.
+    const fingerprint = `${toolName}:${JSON.stringify(toolArgs)}`;
+    if (result.success) {
+      if (fingerprint === this.lastActionFingerprint) {
+        this.repeatedActionCount++;
+      } else {
+        this.repeatedActionCount = 1;
+        this.lastActionFingerprint = fingerprint;
+      }
+      if (this.repeatedActionCount >= this.MAX_REPEATED_ACTIONS) {
+        this.loopAbortReason = `repeated the same action ${this.repeatedActionCount} times in a row (${toolName})`;
+        logger.warn('orchestrator', `Loop detected: ${this.loopAbortReason}`);
+      }
+    } else {
+      this.repeatedActionCount = 0;
+      this.lastActionFingerprint = '';
+    }
+  }
+
+  /**
+   * Keep tool-call arguments bounded when persisting history. Arguments
+   * may contain large payloads (file writes etc.). If a payload exceeds
+   * the cap it is replaced with `{}` so replayed messages stay parseable.
+   */
+  private limitToolCallsForHistory(toolCalls: ToolCall[]): ToolCall[] {
+    const MAX_ARG_CHARS = 10000;
+    return toolCalls.map((tc) => {
+      const args = tc.function.arguments || '';
+      if (args.length <= MAX_ARG_CHARS) return tc;
+      try {
+        JSON.parse(args); // if parseable we could truncate content, but be safe
+      } catch { /* not parseable anyway */ }
+      return {
+        ...tc,
+        function: { ...tc.function, arguments: '{}' },
+      };
+    });
+  }
+
+  /**
+   * Wait for the user to approve or deny a high-impact action.
+   * Defaults to DENY when the request times out or the agent is stopped,
+   * so dangerous operations never run silently.
+   */
+  private requestConfirmation(stepId: string, description: string, action: string): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      const settle = (approved: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        this.pendingConfirmations.delete(stepId);
+        this.setState('executing', approved ? 'Approved — continuing...' : 'Denied — skipping action');
+        resolve(approved);
+      };
+
+      this.pendingConfirmations.set(stepId, settle);
+      this.setState('requires-confirmation', `Approval needed: ${description}`);
+
+      const timer = setTimeout(() => {
+        logger.warn('orchestrator', `Confirmation for ${stepId} timed out, denying by default`);
+        settle(false);
+      }, this.CONFIRMATION_TIMEOUT_MS);
+    });
   }
 
   private isRetryableError(error: string): boolean {
@@ -576,15 +817,23 @@ export class AgentOrchestrator {
     this.conversationHistory = [];
     this.currentTask = null;
     this.currentPlan = null;
+    this.pendingQueue = [];
     this.stepCount = 0;
     this.consecutiveErrors = 0;
+    this.repeatedActionCount = 0;
+    this.lastActionFingerprint = '';
+    this.loopAbortReason = null;
     sessionState.clearHistory();
     this.setState('idle');
     logger.info('orchestrator', 'History cleared');
   }
 
   stop(): void {
+    this.stopRequested = true;
     this.stepCount = getConfig().agent.maxSteps; // Force exit loop
+    // Deny any pending confirmations so waiting actions never execute.
+    for (const [, resolve] of this.pendingConfirmations) resolve(false);
+    this.pendingConfirmations.clear();
     this.setState('idle', 'Stopped by user');
   }
 }

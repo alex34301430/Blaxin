@@ -47,6 +47,11 @@ services:
     environment:
       - PORT=3001
       - NODE_ENV=production
+      - BLAXIN_DATA_DIR=/app/data
+      # Required for web deployments behind a public domain: list the
+      # origin(s) that may call the backend, e.g. https://blaxin.example.com
+      # (comma separated). Leave empty for localhost-only use.
+      - BLAXIN_ALLOWED_ORIGINS=${BLAXIN_ALLOWED_ORIGINS:-}
       - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}

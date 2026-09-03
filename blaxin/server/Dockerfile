@@ -14,11 +14,13 @@ RUN npm ci --omit=dev
 COPY src/ ./src/
 COPY tsconfig.json ./
 
-# Create data directory for config and credentials
+# Create data directory for config, credentials, and session state.
+# Mount a volume here so configuration survives container rebuilds.
 RUN mkdir -p /app/data
 
 ENV NODE_ENV=production
 ENV PORT=3001
+ENV BLAXIN_DATA_DIR=/app/data
 
 EXPOSE 3001
 

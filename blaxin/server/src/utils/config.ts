@@ -1,8 +1,8 @@
 import { AppConfig } from '../types.js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { dataPath } from './paths.js';
 
-const CONFIG_FILE = join(process.cwd(), 'blaxin-config.json');
+const CONFIG_FILE = dataPath('blaxin-config.json');
 
 const defaultConfig: AppConfig = {
   server: {

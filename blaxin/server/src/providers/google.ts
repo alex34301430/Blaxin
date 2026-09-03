@@ -1,5 +1,6 @@
 import { AIRequest, AIResponse, ModelInfo } from '../types.js';
 import { AIProvider } from './base.js';
+import { toGeminiMessages } from './messages.js';
 import { logger } from '../utils/logger.js';
 
 export class GoogleProvider extends AIProvider {
@@ -35,13 +36,7 @@ export class GoogleProvider extends AIProvider {
   async chat(request: AIRequest): Promise<AIResponse> {
     if (!this.apiKey) throw new Error('API key required');
 
-    const systemMsg = request.messages.find(m => m.role === 'system');
-    const contents = request.messages
-      .filter(m => m.role !== 'system')
-      .map(m => ({
-        role: m.role === 'assistant' ? 'model' : 'user',
-        parts: [{ text: m.content }],
-      }));
+    const { systemInstruction, contents } = toGeminiMessages(request.messages);
 
     const body: any = {
       contents,
@@ -50,8 +45,8 @@ export class GoogleProvider extends AIProvider {
       },
     };
 
-    if (systemMsg) {
-      body.systemInstruction = { parts: [{ text: systemMsg.content }] };
+    if (systemInstruction) {
+      body.systemInstruction = { parts: [{ text: systemInstruction }] };
     }
 
     if (request.tools && request.tools.length > 0) {

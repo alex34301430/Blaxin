@@ -1,5 +1,5 @@
 import { AIRequest, AIResponse, ChatMessage, ModelInfo, ToolCall } from '../types.js';
-import { AIProvider, parseToolCalls } from './base.js';
+import { AIProvider, parseToolCalls, classifyKeyHttpStatus, classifyKeyNetworkError, fetchWithTimeout, ValidateKeyResult } from './base.js';
 import { logger } from '../utils/logger.js';
 
 interface OpenRouterModel {
@@ -30,24 +30,30 @@ export class OpenRouterProvider extends AIProvider {
   readonly baseUrl = 'https://openrouter.ai/api/v1';
   readonly apiKeyRequired = true;
 
-  async validateKey(apiKey: string): Promise<{ valid: boolean; error?: string }> {
+  async validateKey(apiKey: string): Promise<ValidateKeyResult> {
     try {
-      const response = await fetch('https://openrouter.ai/api/v1/models', {
+      const response = await fetchWithTimeout('https://openrouter.ai/api/v1/models', {
         headers: {
           'Authorization': `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
+        timeoutMs: 10000,
       });
       if (response.ok) return { valid: true };
       if (response.status === 401) {
-        return { valid: false, error: 'Authentication failed. The OpenRouter API key is invalid or has been revoked. Check that the key is active at openrouter.ai/keys.' };
+        return {
+          valid: false,
+          code: 'INVALID_KEY',
+          error: 'Authentication failed. The OpenRouter API key is invalid or has been revoked. Check that the key is active at openrouter.ai/keys.',
+        };
       }
-      return { valid: false, error: `OpenRouter returned status ${response.status}` };
+      return { valid: false, ...classifyKeyHttpStatus(response.status) };
     } catch (error: any) {
-      if (error?.cause?.code === 'ENOTFOUND') {
-        return { valid: false, error: 'Network failure. Unable to reach openrouter.ai. Check your internet connection.' };
+      if (String(error?.message || '').includes('timed out') || error?.name === 'AbortError') {
+        return { valid: false, code: 'TIMEOUT', error: 'Connection timed out while reaching openrouter.ai. Check your network and try again.' };
       }
-      return { valid: false, error: `Connection error: ${error?.message}` };
+      const classified = classifyKeyNetworkError(error);
+      return { valid: false, ...classified };
     }
   }
 

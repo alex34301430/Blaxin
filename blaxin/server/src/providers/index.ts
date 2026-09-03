@@ -12,6 +12,44 @@ import { logger } from '../utils/logger.js';
 
 export { AIProvider, ProviderError } from './base.js';
 
+// ── API Key Format Check ────────────────────────────────────────
+
+/**
+ * Basic structural validation for an API key. Deliberately permissive:
+ * provider keys evolve (OpenRouter sk-or-v1-..., Anthropic sk-ant-...,
+ * Google AIza..., Groq gsk_..., OpenAI sk-...). We only reject input that
+ * is clearly not a key, so legitimate keys are never refused on format
+ * grounds — the provider server is the authority during validation.
+ */
+export function basicKeyCheck(providerId: ProviderId, rawKey: unknown): { ok: boolean; error?: string } {
+  // Local provider: no key required, the "key" field may hold a base URL.
+  if (providerId === 'ollama') {
+    return { ok: true };
+  }
+
+  if (typeof rawKey !== 'string' || rawKey.trim().length === 0) {
+    return { ok: false, error: 'API key is required.' };
+  }
+
+  const key = rawKey.trim();
+
+  if (key.length < 8) {
+    return { ok: false, error: 'The key looks too short to be a valid API key. Check that you copied the whole key.' };
+  }
+  if (key.length > 1024) {
+    return { ok: false, error: 'The key is unusually long. Check that you did not paste extra text.' };
+  }
+  if (/\s/.test(key)) {
+    return { ok: false, error: 'The key contains spaces. API keys do not contain spaces — check that you copied it correctly.' };
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f\u007f]/.test(key)) {
+    return { ok: false, error: 'The key contains invisible control characters. Paste the key again without extra whitespace.' };
+  }
+
+  return { ok: true };
+}
+
 // ── Fallback Order ──────────────────────────────────────────────
 
 const FALLBACK_ORDER: ProviderId[] = [
@@ -92,20 +130,44 @@ class ProviderRegistry {
     }
   }
 
-  async validateKey(providerId: ProviderId, apiKey: string): Promise<{ valid: boolean; error?: string }> {
+  async validateKey(providerId: ProviderId, apiKey: string): Promise<{ valid: boolean; error?: string; code?: string }> {
+    const format = basicKeyCheck(providerId, apiKey);
+    if (!format.ok) {
+      return { valid: false, error: format.error, code: 'BAD_FORMAT' };
+    }
     const provider = this.getProvider(providerId);
-    return provider.validateKey(apiKey);
+    const result = await provider.validateKey(apiKey.trim());
+    return { ...result };
   }
 
-  async saveKey(providerId: ProviderId, apiKey: string): Promise<{ valid: boolean; error?: string }> {
-    const validation = await this.validateKey(providerId, apiKey);
-    if (validation.valid) {
-      credentialStore.save(providerId, apiKey);
-      const provider = this.getProvider(providerId);
-      (provider as any).apiKey = apiKey;
-      logger.info('providers', `API key saved for ${provider.name}`);
+  async saveKey(
+    providerId: ProviderId,
+    apiKey: string,
+    options: { skipValidation?: boolean } = {},
+  ): Promise<{ valid: boolean; error?: string; code?: string }> {
+    const format = basicKeyCheck(providerId, apiKey);
+    if (!format.ok) {
+      return { valid: false, error: format.error, code: 'BAD_FORMAT' };
     }
-    return validation;
+
+    const trimmed = apiKey.trim();
+
+    // Remote validation is the default. `skipValidation` is only honoured
+    // for structurally valid keys, and is intended for the case where the
+    // provider is unreachable (network failure) — the key still gets
+    // verified live the first time it is used.
+    if (!options.skipValidation) {
+      const validation = await this.validateKey(providerId, trimmed);
+      if (!validation.valid) {
+        return validation;
+      }
+    }
+
+    credentialStore.save(providerId, trimmed);
+    const provider = this.getProvider(providerId);
+    (provider as any).apiKey = trimmed;
+    logger.info('providers', `API key saved for ${provider.name}`);
+    return { valid: true };
   }
 
   removeKey(providerId: ProviderId): void {

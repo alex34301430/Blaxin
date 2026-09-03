@@ -1,5 +1,6 @@
 import { AIRequest, AIResponse, ModelInfo } from '../types.js';
 import { AIProvider, parseToolCalls } from './base.js';
+import { toOllamaMessages } from './messages.js';
 import { logger } from '../utils/logger.js';
 
 export class OllamaProvider extends AIProvider {
@@ -45,15 +46,9 @@ export class OllamaProvider extends AIProvider {
   }
 
   async chat(request: AIRequest): Promise<AIResponse> {
-    const systemMsg = request.messages.find(m => m.role === 'system');
-    const nonSystemMsgs = request.messages.filter(m => m.role !== 'system');
-
     const body: any = {
       model: request.model,
-      messages: [
-        ...(systemMsg ? [{ role: 'system', content: systemMsg.content }] : []),
-        ...nonSystemMsgs.map(m => ({ role: m.role, content: m.content })),
-      ],
+      messages: toOllamaMessages(request.messages),
       stream: false,
       options: {
         num_predict: request.maxTokens || 4096,

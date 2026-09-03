@@ -138,6 +138,11 @@ fn start_server(resource_dir: &Path) -> Result<Child, String> {
         .args(&entry_args)
         .current_dir(&entry_dir)
         .env("PORT", "3001")
+        // Desktop builds must bind loopback only: the backend can run
+        // shells and drive the desktop, so it must not be reachable from
+        // the network.
+        .env("BLAXIN_HOST", "127.0.0.1")
+        .env("BLAXIN_DESKTOP", "1")
         .env("NODE_ENV", "production")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

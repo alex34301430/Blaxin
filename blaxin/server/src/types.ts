@@ -53,6 +53,13 @@ export interface ChatMessage {
   timestamp: number;
   toolCallId?: string;
   name?: string;
+  /**
+   * Tool calls produced by the assistant for this message.
+   * Replayed to the provider so that tool results can be matched to
+   * their originating tool calls (required by OpenAI-compatible APIs,
+   * Anthropic tool_use blocks, and Gemini functionCall parts).
+   */
+  toolCalls?: ToolCall[];
 }
 
 export interface ToolCall {
