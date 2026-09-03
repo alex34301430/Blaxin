@@ -83,6 +83,9 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
     if (isListening) {
       stopListening();
     } else {
+      // Using the mic implies consent: enable voice input if it was
+      // switched off in Settings, then start listening.
+      if (!voiceEnabled) setVoiceEnabled(true);
       startListening();
     }
   };
@@ -258,7 +261,6 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
                   transition: 'all 0.2s',
                 }}
                 title={isListening ? 'Stop listening' : 'Start voice input'}
-                onClickCapture={() => setVoiceEnabled(!voiceEnabled)}
               >
                 {isListening ? <FiMicOff size={14} /> : <FiMic size={14} />}
               </button>

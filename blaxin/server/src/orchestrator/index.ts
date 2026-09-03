@@ -6,7 +6,7 @@ import {
 import { providers, AIProvider, ProviderError } from '../providers/index.js';
 import { toolRegistry } from '../tools/index.js';
 import { logger } from '../utils/logger.js';
-import { getConfig } from '../utils/config.js';
+import { getConfig, matchesAnyPattern } from '../utils/config.js';
 import { sessionState } from '../utils/session-state.js';
 import { memoryStore } from '../utils/memory.js';
 
@@ -554,7 +554,12 @@ export class AgentOrchestrator {
     // Check if confirmation is needed — and actually wait for the user's
     // decision before executing. Denied actions are skipped, never run.
     const config = getConfig();
-    if (config.agent.requireConfirmation && toolRegistry.requiresConfirmation(toolName, toolArgs)) {
+    const toolNeedsConfirmation = toolRegistry.requiresConfirmation(toolName, toolArgs);
+    // Additional pattern-based gate from config: destructive words inside
+    // terminal commands (rm, sudo, shutdown, ...) always require approval.
+    const command = toolName === 'terminal' ? String((toolArgs.command as string) || '') : '';
+    const patternNeedsConfirmation = matchesAnyPattern(command, config.agent.confirmationPatterns);
+    if (config.agent.requireConfirmation && (toolNeedsConfirmation || patternNeedsConfirmation)) {
       const description = `Execute ${toolName}: ${step.description}`;
       const actionJson = JSON.stringify({ tool: toolName, args: toolArgs });
       this.emit('confirmation-required', {

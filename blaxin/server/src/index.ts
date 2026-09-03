@@ -263,6 +263,27 @@ app.delete('/api/memory', (_req, res) => {
   res.json({ success: true });
 });
 
+// JSON body / route error handling — always respond in JSON, never leak stacks.
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  if (err?.type === 'entity.parse.failed' || err instanceof SyntaxError) {
+    return res.status(400).json({ error: 'Malformed JSON body', code: 'BAD_JSON' });
+  }
+  if (err?.type === 'entity.too.large' || err?.status === 413) {
+    return res.status(413).json({ error: 'Request body too large', code: 'BODY_TOO_LARGE' });
+  }
+  const status = err?.status || err?.statusCode;
+  if (status && status >= 400 && status < 500) {
+    return res.status(status).json({ error: err.message || 'Bad request', code: 'BAD_REQUEST' });
+  }
+  logger.error('api', 'Unhandled request error', err);
+  res.status(500).json({ error: 'Internal server error', code: 'INTERNAL' });
+});
+
+// 404 handler — unknown API paths return JSON, not HTML.
+app.use('/api', (_req, res) => {
+  res.status(404).json({ error: 'Not found', code: 'NOT_FOUND' });
+});
+
 // Create HTTP server
 const server = createServer(app);
 
@@ -370,6 +391,17 @@ wss.on('connection', (ws) => {
 terminalWss.on('connection', (ws) => {
   logger.info('terminal-ws', 'Terminal client connected');
   handleTerminalWebSocket(ws);
+});
+
+// Fail loudly and exit when the port is already in use or binding fails,
+// instead of lingering as a zombie process.
+server.on('error', (error: NodeJS.ErrnoException) => {
+  if (error.code === 'EADDRINUSE') {
+    logger.error('server', `Port ${PORT} is already in use. Is another BLAXIN instance running?`);
+  } else {
+    logger.error('server', `Failed to start server: ${error.message}`);
+  }
+  process.exit(1);
 });
 
 // Start server

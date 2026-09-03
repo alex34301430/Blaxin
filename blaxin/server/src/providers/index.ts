@@ -50,6 +50,25 @@ export function basicKeyCheck(providerId: ProviderId, rawKey: unknown): { ok: bo
   return { ok: true };
 }
 
+// ── Env-Var API Keys (container/web deployments) ───────────────
+
+/**
+ * Environment variable name that can supply a provider's API key
+ * (see .env.example). The encrypted credential store always takes
+ * precedence; the env var is only a fallback during initialization.
+ */
+export function envVarForProvider(providerId: ProviderId): string | null {
+  const mapping: Partial<Record<ProviderId, string>> = {
+    'openrouter': 'OPENROUTER_API_KEY',
+    'openai': 'OPENAI_API_KEY',
+    'anthropic': 'ANTHROPIC_API_KEY',
+    'google': 'GOOGLE_API_KEY',
+    'groq': 'GROQ_API_KEY',
+    'together': 'TOGETHER_API_KEY',
+  };
+  return mapping[providerId] || null;
+}
+
 // ── Fallback Order ──────────────────────────────────────────────
 
 const FALLBACK_ORDER: ProviderId[] = [
@@ -98,6 +117,17 @@ class ProviderRegistry {
     for (const provider of this.providers.values()) {
       try {
         await provider.initialize();
+
+        // Fallback: when no encrypted credential exists, accept a key
+        // supplied through the environment (container/web deployments).
+        const envKey = envVarForProvider(provider.id);
+        if (!provider.hasApiKey() && envKey) {
+          const value = process.env[envKey];
+          if (value && value.trim()) {
+            provider.setApiKey(value.trim());
+            logger.info('providers', `API key for ${provider.name} loaded from environment (${envKey})`);
+          }
+        }
       } catch (error) {
         logger.warn('providers', `Failed to initialize ${provider.name}`, error);
       }

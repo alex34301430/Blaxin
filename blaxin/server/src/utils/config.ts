@@ -48,7 +48,17 @@ export function loadConfig(): AppConfig {
     if (existsSync(CONFIG_FILE)) {
       const raw = readFileSync(CONFIG_FILE, 'utf-8');
       const stored = JSON.parse(raw);
-      return { ...defaultConfig, ...stored };
+      // Deep-merge each subsection so a config written by an older
+      // BLAXIN version cannot silently drop newer defaults
+      // (e.g. agent.requireConfirmation, agent.confirmationPatterns).
+      return {
+        ...defaultConfig,
+        ...stored,
+        server: { ...defaultConfig.server, ...(stored.server || {}) },
+        agent: { ...defaultConfig.agent, ...(stored.agent || {}) },
+        tools: { ...defaultConfig.tools, ...(stored.tools || {}) },
+        appearance: { ...defaultConfig.appearance, ...(stored.appearance || {}) },
+      };
     }
   } catch (e) {
     // Fall through to defaults
@@ -66,4 +76,14 @@ export function saveConfig(config: AppConfig): void {
 
 export function getConfig(): AppConfig {
   return loadConfig();
+}
+
+/**
+ * Case-insensitive substring match against a list of danger patterns.
+ * Used to decide whether a terminal command needs user confirmation.
+ */
+export function matchesAnyPattern(text: string, patterns: string[]): boolean {
+  if (!text || !patterns || patterns.length === 0) return false;
+  const lowered = text.toLowerCase();
+  return patterns.some((p) => p && lowered.includes(p.toLowerCase()));
 }

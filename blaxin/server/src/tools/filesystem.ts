@@ -109,7 +109,7 @@ export class FileSystemTool implements Tool {
       return { success: false, output: '', error: 'Operation and path are required' };
     }
 
-    const destructive = ['delete', 'write', 'rename'].includes(operation);
+    const destructive = ['delete', 'write', 'rename', 'create_dir'].includes(operation);
     if (destructive && isProtectedPath(filePath)) {
       logger.warn('filesystem', `Blocked ${operation} on protected path: ${filePath}`);
       return {
