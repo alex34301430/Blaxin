@@ -23,15 +23,17 @@ Model
 - **Multi-Provider AI Support**: OpenRouter (first-class), OpenAI, Anthropic, Google, Groq, Together, Ollama
 - **Live Model Discovery**: Automatically discovers available models from configured providers
 - **Free Model Detection**: Identifies and recommends free models
-- **Desktop Control**: Mouse, keyboard, window management via xdotool
-- **File System**: Read, write, create, delete files and directories
-- **Terminal**: Execute shell commands with timeout protection
+- **Agent Task Engine**: state machine, step tracking, retry/backoff, provider fallback, loop detection, confirmation gate for high-impact tool actions, and a sequential task queue
+- **Task Memory**: persistent, searchable, deletable memory that never stores secrets
+- **Desktop Control**: Mouse, keyboard, window management via xdotool/ydotool
+- **File System**: Read, write, create, delete files and directories (protected against system/credential paths)
+- **Terminal**: Execute shell commands with timeout protection and dangerous-command confirmation
 - **Browser**: Open URLs, search the web
 - **Screenshots**: Capture screen state for visual observation
 - **Clipboard**: Read/write system clipboard
 - **System Info**: CPU, memory, disk, network information
 - **Secure Credentials**: AES-256-CBC encrypted API key storage
-- **Cyberpunk UI**: Futuristic dark theme with neon accents
+- **Cyberpunk UI**: Futuristic dark theme with neon accents, keyboard focus states and reduced-motion support
 - **Error Diagnostics**: Detailed error categorization and resolution guidance
 
 ## Getting Started
@@ -112,10 +114,45 @@ Open http://localhost:5173 in your browser.
 
 ## Security
 
-- API keys are encrypted with AES-256-CBC
+- API keys are encrypted with AES-256-CBC and stored with 0600 permissions
 - Keys are never logged, exposed in errors, or sent to the frontend
-- Destructive actions require confirmation
-- Secrets are masked in all logs and diagnostics
+- Secrets are masked in all logs and diagnostics, and refused by the memory store
+- High-impact tool actions (deletes, destructive shell commands, installs, browser/desktop actions) pause the agent and require explicit user approval before execution
+- Filesystem writes/deletes are hard-blocked on system-critical and credential paths (`/etc`, `/boot`, `~/.ssh`, key files, etc.)
+- The backend validates the `Origin` of every WebSocket upgrade and state-changing HTTP request; only local/desktop origins are allowed by default (see `BLAXIN_ALLOWED_ORIGINS` below)
+- The desktop app binds the bundled backend to `127.0.0.1` only
+
+### Connection origin policy
+
+Browsers always attach an `Origin` header to non-GET requests, so requests with no origin header are treated as trusted local tooling. Any browser-origin request must match:
+
+- localhost / `127.0.0.1` / `[::1]` (any port)
+- the Tauri desktop origin (`tauri://localhost`, `http(s)://tauri.localhost`)
+- origins listed in `BLAXIN_ALLOWED_ORIGINS` (comma separated)
+
+For a remote web deployment behind a public domain, set e.g. `BLAXIN_ALLOWED_ORIGINS=https://blaxin.example.com`.
+
+### Environment variables
+
+| Variable | Purpose |
+|----------|---------|
+| `PORT` | Server port (default `3001`) |
+| `BLAXIN_HOST` | Bind address (desktop sets `127.0.0.1`) |
+| `BLAXIN_DATA_DIR` | Directory for config, encrypted credentials and session state (defaults to the working directory when writable, otherwise `~/.local/share/blaxin`) |
+| `BLAXIN_ALLOWED_ORIGINS` | Extra allowed browser origins (comma separated) |
+| `BLAXIN_SECRET` | Hex key (≥ 64 chars) for encrypting stored credentials; otherwise a machine-derived key is used |
+
+## Memory
+
+BLAXIN keeps a persistent memory store (`.blaxin-state/memory.json` under the data directory) for user preferences, durable facts and failure lessons. Entries are capped in size/count, de-duplicated, and refused when they look like secrets. Manage it from the API: `GET /api/memory`, `DELETE /api/memory`.
+
+## Installer
+
+One-command installation for Linux x86_64 downloads the latest stable release, verifies its checksum and installs it with desktop integration:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/install.sh | bash
+```
 
 ## Tech Stack
 
