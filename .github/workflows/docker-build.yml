@@ -149,14 +149,29 @@ jobs:
           severity: CRITICAL,HIGH,MEDIUM
         continue-on-error: true
 
-      - name: Upload SARIF to GitHub Security tab
+      # upload-sarif accepts a single file; each image needs its own
+      # category because CodeQL refuses to combine multiple SARIF runs
+      # under one category.
+      - name: Upload SARIF to GitHub Security tab (server)
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          # upload-sarif accepts a single file OR a directory (scanned
-          # recursively for *.sarif) — it does not accept a file list.
-          sarif_file: .
-          category: docker-vulnerabilities
+          sarif_file: trivy-server.sarif
+          category: docker-vulnerabilities-server
+
+      - name: Upload SARIF to GitHub Security tab (client)
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-client.sarif
+          category: docker-vulnerabilities-client
+
+      - name: Upload SARIF to GitHub Security tab (nginx)
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-nginx.sarif
+          category: docker-vulnerabilities-nginx
 
       # ── Upload scan artifacts ──────────────────────────────────
       - name: Upload Trivy scan reports
