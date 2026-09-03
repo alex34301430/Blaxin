@@ -1,10 +1,10 @@
 # BLAXIN Engineering Mission — Continuation State
 
 ## CURRENT STATE
-- **Date**: 2026-09-03
+- **Date**: 2026-09-03 (afternoon)
 - **Branch**: main
-- **HEAD**: 9e60309 (pre-session) — 6 commits ahead of origin/main (v1.0.8)
-- **Mission Status**: In progress — Phases D–J substantially implemented, not yet committed or pushed this session
+- **HEAD**: b1948c0 (v1.1.0 released and verified)
+- **Mission Status**: **v1.1.1 production fix prepared and verified locally (not yet released/pushed).** Version bumped to 1.1.1 everywhere; installer is distro-aware (.deb preferred on Debian-family); stale `/usr/local/bin/blaxin` launcher shadowing identified and fix prepared; exact `BLAXIN</-` branding applied; icons regenerated from the official logo; a local `cargo tauri build` produced `BLAXIN_1.1.1_amd64.deb` and a real launch from it was verified (backend up, `/api/health` reports 1.1.1, window titled `BLAXIN</- — AI Desktop Agent` renders). See "V1.1.1 PRODUCTION FIX SESSION" below. Remaining: the two privileged steps (move stale launcher, `dpkg -i` the 1.1.1 deb) need a sudo password and are queued for the user; then a final re-verify + commit/push + CI release of v1.1.1.
 
 ## WORK COMPLETED THIS SESSION (VERIFIED)
 
@@ -60,16 +60,66 @@
 - Client: `npm run build` clean (714 kB chunk warning noted, non-blocking).
 - Live API matrix on scratch server verified (HTTP + WS origin behavior, BAD_FORMAT path, memory endpoints) then stopped/cleaned.
 
-## REMAINING WORK
-- [ ] Add API-key regression tests for client-side flow is covered by code; optionally e2e later
-- [ ] Docs pass: README updated (this session); final polish of README wording if needed
-- [ ] Review remaining known issues below and decide scope
-- [ ] Final full sweep (server tsc + tests + build, client build)
-- [ ] Logical git commits of this session's work
-- [ ] Push to origin/main and verify remote state (6 pre-existing commits + new ones)
-- [ ] Release pipeline NOT TESTABLE locally (needs GitHub secrets + CI): v1.0.8 remote status, latest.json refresh, updater artifact verification — see phase N
+## BLANK-GUI DIAGNOSIS (v1.1.0 AppImage) — 2026-09-03
+
+**Symptom**: v1.1.0 AppImage on Kali: backend starts (`[BLAXIN] Server is ready!`),
+window opens but is completely blank. stderr shows:
+`Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...` plus
+harmless gvfs/atk-bridge noise.
+
+**Root cause (proven, reproduced on a modern Debian box, same X display):**
+The Tauri/linuxdeploy AppImage bundles the CI runner's (ubuntu-22.04, jammy)
+WebKitGTK/GTK/GLib stack — `usr/lib/libwebkit2gtk-4.1.so.0`, GTK 3.24.33,
+GLib 2.72-ish, and jammy's `WebKitWebProcess`/`WebKitNetworkProcess` helpers.
+On hosts where that bundled WebKitWebProcess cannot create a default EGL
+display (newer host Mesa, virtual/headless GPU, Xvfb), it aborts before any
+web content is rendered. The window then stays uniformly blank (#353535) while
+the bundled Node server keeps running. The abort string lives in the bundled
+`libwebkit2gtk-4.1.so.0`. Known upstream limitation: tauri-apps/tauri#11988
+(closed "upstream / not planned"); same class as devpod#1767, yaak reports.
+
+**Not the cause**: app code (CSP, endpoints, backend URL — all verified fine);
+`WEBKIT_DISABLE_DMABUF_RENDERER=1`, `WEBKIT_DISABLE_COMPOSITING_MODE=1`,
+`LIBGL_ALWAYS_SOFTWARE=1` do NOT help (tested).
+
+**Evidence matrix (all on the same machine/display):**
+- v1.1.0 AppImage as shipped → WebKitWebProcess aborts (EGL), blank window.
+- Same AppImage binary with `LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu`
+  (system WebKitGTK 2.52.5) → WebKitWebProcess runs, UI renders.
+- v1.1.0 `.deb` binary (system WebKitGTK; Depends on `libwebkit2gtk-4.1-0`
+  is correct) → UI renders.
+
+**Action for the user (no release needed):** install the `.deb` on
+Debian/Ubuntu/Kali (system WebKitGTK), not the AppImage. README now documents
+this.
+
+**If the AppImage must work everywhere**: the fix is a build-pipeline change
+for a FUTURE release — make the AppImage use the host's system WebKitGTK
+(e.g. exclude the WebKit/GTK/GLib stack from linuxdeploy bundling, mirroring
+the .deb behavior) or move the primary Linux distribution channel to the .deb.
+Not done yet; no new release was cut for this diagnosis.
+
+## V1.1.1 PRODUCTION FIX SESSION — 2026-09-03 (afternoon)
+
+### Done and verified this session
+- **Launcher/menu-click fix**: root cause confirmed — `/usr/local/bin/blaxin` (a stale Bengali USB-pendrive launcher script, 952 B) shadows the real `/usr/bin/blaxin` (v1.1.0 .deb binary) in PATH, so the installed `BLAXIN.desktop` (`Exec=blaxin`) launched the wrong program. Fix: move the stale file aside to `/usr/local/bin/blaxin.bak-usb-launcher` (backup) so `Exec=blaxin` resolves to `/usr/bin/blaxin`. Installer now also auto-moves stale `/usr/local/bin/blaxin` after a .deb install.
+- **Version 1.1.1 everywhere**: `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml` (+ Cargo.lock), `client/package.json` (+ lockfile), `server/package.json` (+ lockfile), `server/src/utils/version.ts` (`APP_VERSION='1.1.1'`), `resources/blaxin-server/package.json`, client Sidebar label (`BLAXIN</- v1.1.1`). Only remaining `1.0.0` is `session-state.ts` state-schema marker (not user-facing; CI never bumps it). `release.yml` now keeps the Sidebar label in sync on future releases.
+- **Branding**: exact `BLAXIN</-` wordmark in Sidebar header, Sidebar footer, SetupWizard title, ChatPanel welcome header, window title (`BLAXIN</- — AI Desktop Agent`), tray tooltip, repo `blaxin.desktop`, install.sh desktop entry, README H1. (Deb menu entry keeps `Name=BLAXIN` — Tauri derives it from productName, which must stay `BLAXIN` because it names the binary.)
+- **Icons**: all four `src-tauri/icons/*.png` (32/128/256/512) regenerated from the exact official logo (`/home/tsn/Downloads/ChatGPT Image Sep 3, 2026, 04_30_12 PM.png`, 1254×1254 RGBA); verified pixel-identical to direct resizes (AE=0 for all sizes). Bundled into the new deb at every hicolor size.
+- **install.sh distro-aware**: Debian-family (Debian/Ubuntu/Kali/Mint/Pop!_OS, detected via `/etc/debian_version` or dpkg+apt-get) installs the `.deb` via `dpkg -i` (auto `apt-get install -f -y` if deps missing) — system WebKitGTK, avoiding the AppImage EGL blank-window issue. AppImage path preserved (default on non-Debian) plus `--appimage` flag to force. Stale-launcher guard added. Fixes a latent no-jq fallback bug (grep no-match no longer kills the script under `set -euo pipefail`).
+- **Tests/builds**: server `tsc --noEmit` clean; server `npm test` → 9 files, 75 tests PASS; server `npm run build` clean; client `npm run build` clean (714 kB chunk warning, known). Installer functionally tested end-to-end against a local mock GitHub release (deb selection, `--appimage` force, no-deb fallback, `--help`) — all correct.
+- **Local .deb build + real launch**: `cargo tauri build --bundles deb` compiled (blaxin v1.1.1) and produced `target/release/bundle/deb/BLAXIN_1.1.1_amd64.deb` (39 MB; Depends auto-injected: libwebkit2gtk-4.1-0, libgtk-3-0, libayatana-appindicator3-1). Extracted and launched on DISPLAY=:0: bundled node+server found, `[BLAXIN] Server is ready!`, `/api/health` → `{"status":"ok","version":"1.1.1",...}`, window `BLAXIN</- — AI Desktop Agent` rendered (screenshot + OCR show the sidebar wordmark). Build exits 1 at the end only because Tauri wants `TAURI_SIGNING_PRIVATE_KEY` for updater artifacts — CI has it; the deb itself is complete and unsigned-deb-safe.
+
+### Remaining (needs user sudo password — cannot run non-interactively)
+- [ ] `sudo mv /usr/local/bin/blaxin /usr/local/bin/blaxin.bak-usb-launcher`
+- [ ] `sudo dpkg -i /home/tsn/Blaxin/blaxin/src-tauri/target/release/bundle/deb/BLAXIN_1.1.1_amd64.deb`
+- [ ] Final re-verify after install (`dpkg -s blaxin` → 1.1.1, `which blaxin` → /usr/bin/blaxin, launch + health)
+- [ ] Git commit of this session's changes; then (separately) tag v1.1.1 and let CI release — NOT done per instructions
+
+## REMAINING WORK (older, still open)
+- [ ] Docs pass: README updated; final polish of README wording if needed
 - [ ] Voice wake-word / interruption polish (architecture present via Web Speech API; not e2e-verified)
-- [ ] Tauri desktop e2e (cargo build needs webkit deps; NOT TESTABLE in this environment unless deps present)
+- [ ] latest.json refresh happens automatically on the next successful tagged release (CI commits it back to main)
 
 ## KNOWN ISSUES (still open)
 - `blaxin/update/latest.json` is stale (v1.0.2, empty signature); CI refreshes it on the next successful tagged release.

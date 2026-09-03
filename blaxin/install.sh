@@ -8,10 +8,13 @@
 # What it does:
 #   1. Detects Linux distribution and architecture
 #   2. Resolves the latest stable BLAXIN release from GitHub
-#   3. Downloads the AppImage with retry and timeout
-#   4. Verifies SHA-256 checksum
-#   5. Installs to /opt/blaxin (requires sudo)
-#   6. Creates desktop integration (.desktop file + icon)
+#   3. On Debian-family distros (Debian/Ubuntu/Kali/Mint/Pop!_OS) installs
+#      the .deb package — it runs against the system WebKitGTK, which is the
+#      most reliable configuration. Pass --appimage to force the portable
+#      AppImage instead (the default on non-Debian distros).
+#   4. Downloads the selected artifact with retry and timeout
+#   5. Verifies SHA-256 checksum
+#   6. Installs the package (requires sudo)
 #   7. Verifies the installation
 #
 # Requirements:
@@ -76,6 +79,34 @@ success() { _log "${GREEN}"  "  OK"  "$@"; }
 warn()    { _log "${YELLOW}" "WARN"  "$@"; }
 error()   { _log "${RED}"    "ERROR" "$@" >&2; }
 fatal()   { error "$@"; exit "${EXIT_GENERAL_ERROR}"; }
+
+usage() {
+    cat <<'EOF'
+Usage: install.sh [OPTIONS]
+
+Installs the latest stable BLAXIN release for Linux x86_64.
+
+Options:
+  --appimage   Force the portable AppImage install. On Debian-family
+               distros the .deb package is preferred by default because
+               it uses the system WebKitGTK.
+  -h, --help   Show this help and exit
+
+Examples:
+  curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/install.sh | bash -s -- --appimage
+EOF
+}
+
+# ── Argument parsing ───────────────────────────────────────────────────
+FORCE_APPIMAGE=false
+for arg in "$@"; do
+    case "${arg}" in
+        --appimage) FORCE_APPIMAGE=true ;;
+        -h|--help)  usage; exit "${EXIT_SUCCESS}" ;;
+        *)          fatal "Unknown argument: ${arg}. Run with --help for usage." ;;
+    esac
+done
 
 header() {
     echo ""
@@ -182,6 +213,29 @@ case "${ARCH}" in
         ;;
 esac
 success "Architecture: ${ARCH}"
+
+# Detect distribution family — Debian-family distros (Debian, Ubuntu,
+# Kali, Mint, Pop!_OS, ...) install the .deb package so the app runs
+# against the system WebKitGTK (the bundled AppImage WebKit stack can
+# fail to initialize EGL on some hosts).
+DEBIAN_FAMILY=false
+if [[ -f /etc/debian_version ]] || { check_command dpkg && check_command apt-get; }; then
+    DEBIAN_FAMILY=true
+fi
+
+INSTALL_METHOD="appimage"
+if [[ "${DEBIAN_FAMILY}" == "true" ]]; then
+    DISTRO_NAME=$(lsb_release -ds 2>/dev/null || (grep -m1 '^ID=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '"') || echo "Debian-family")
+    success "Distribution: ${DISTRO_NAME}"
+    if [[ "${FORCE_APPIMAGE}" == "true" ]]; then
+        info "AppImage install forced via --appimage"
+    else
+        INSTALL_METHOD="deb"
+        info "Debian-family detected — preferring the .deb package (system WebKitGTK)"
+    fi
+else
+    success "Distribution: non-Debian (AppImage install)"
+fi
 
 # Detect download tool
 DOWNLOAD_TOOL=""
@@ -304,36 +358,57 @@ fi
 
 success "Latest version: ${VERSION}"
 
-# Find AppImage asset — reject source archives and non-AppImage files
-APPIMAGE_URL=""
-if [[ "${HAS_JQ}" == "true" ]]; then
-    # Use jq to find the AppImage asset, explicitly rejecting source archives
-    APPIMAGE_URL=$(echo "${RELEASE_JSON}" | jq -r '
-        .assets[]? |
-        select(.name | test("\\.AppImage$")) |
-        select(.name | test("(source|\\.tar\\.gz|\\.zip|data\\.tar\\.gz|control\\.tar\\.gz)") | not) |
-        .browser_download_url
-    ' 2>/dev/null | head -1)
-else
-    # Fallback: grep for AppImage URLs, explicitly rejecting source archives
-    APPIMAGE_URL=$(echo "${RELEASE_JSON}" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*\.AppImage"' | head -1 | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/')
-    
-    # Extra safety: reject if it looks like a source archive
-    if [[ "${APPIMAGE_URL}" == *".tar.gz"* ]] || [[ "${APPIMAGE_URL}" == *".zip"* ]] || \
-       [[ "${APPIMAGE_URL}" == *"source"* ]] || [[ "${APPIMAGE_URL}" == *"data.tar"* ]] || \
-       [[ "${APPIMAGE_URL}" == *"control.tar"* ]]; then
-        APPIMAGE_URL=""
+# Find the AppImage asset, explicitly rejecting source archives
+find_appimage_asset() {
+    if [[ "${HAS_JQ}" == "true" ]]; then
+        echo "${RELEASE_JSON}" | jq -r '
+            .assets[]? |
+            select(.name | test("\\.AppImage$")) |
+            select(.name | test("(source|\\.tar\\.gz|\\.zip|data\\.tar\\.gz|control\\.tar\\.gz)") | not) |
+            .browser_download_url
+        ' 2>/dev/null | head -1
+    else
+        echo "${RELEASE_JSON}" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*\.AppImage"' | head -1 | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo ""
+    fi
+}
+
+# Find the .deb asset, explicitly rejecting source archives
+find_deb_asset() {
+    if [[ "${HAS_JQ}" == "true" ]]; then
+        echo "${RELEASE_JSON}" | jq -r '
+            .assets[]? |
+            select(.name | test("\\.deb$")) |
+            select(.name | test("(source|\\.tar\\.gz|\\.zip)") | not) |
+            .browser_download_url
+        ' 2>/dev/null | head -1
+    else
+        echo "${RELEASE_JSON}" | grep -o '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*\.deb"' | head -1 | sed 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/' || echo ""
+    fi
+}
+
+# Select the artifact for the chosen install method
+ASSET_URL=""
+ASSET_KIND=""
+if [[ "${INSTALL_METHOD}" == "deb" ]]; then
+    ASSET_URL=$(find_deb_asset)
+    ASSET_KIND="deb"
+    if [[ -z "${ASSET_URL}" ]]; then
+        warn "No .deb asset in release ${VERSION}. Falling back to AppImage."
+        INSTALL_METHOD="appimage"
+    fi
+fi
+if [[ "${INSTALL_METHOD}" == "appimage" ]]; then
+    ASSET_URL=$(find_appimage_asset)
+    ASSET_KIND="appimage"
+    if [[ -z "${ASSET_URL}" ]]; then
+        fatal "No AppImage found in release ${VERSION}." \
+              "The release may be missing Linux artifacts." \
+              "Visit https://github.com/${REPO}/releases to check available assets."
     fi
 fi
 
-if [[ -z "${APPIMAGE_URL}" ]]; then
-    fatal "No AppImage found in release ${VERSION}." \
-          "The release may be missing Linux artifacts." \
-          "Visit https://github.com/${REPO}/releases to check available assets."
-fi
-
-APPIMAGE_NAME=$(basename "${APPIMAGE_URL}")
-success "AppImage: ${APPIMAGE_NAME}"
+ASSET_NAME=$(basename "${ASSET_URL}")
+success "Artifact: ${ASSET_NAME} (${ASSET_KIND})"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Step 3: Download
@@ -341,7 +416,7 @@ success "AppImage: ${APPIMAGE_NAME}"
 header "Step 3/6: Downloading BLAXIN ${VERSION}"
 
 TEMP_DIR=$(mktemp -d)
-DOWNLOAD_PATH="${TEMP_DIR}/${APPIMAGE_NAME}"
+DOWNLOAD_PATH="${TEMP_DIR}/${ASSET_NAME}"
 
 download_file() {
     local url="$1"
@@ -366,11 +441,11 @@ download_file() {
     fi
 }
 
-info "Downloading ${APPIMAGE_NAME}..."
-info "Source: ${APPIMAGE_URL}"
+info "Downloading ${ASSET_NAME}..."
+info "Source: ${ASSET_URL}"
 echo ""
 
-if ! retry "${MAX_RETRIES}" "${RETRY_DELAY}" download_file "${APPIMAGE_URL}" "${DOWNLOAD_PATH}"; then
+if ! retry "${MAX_RETRIES}" "${RETRY_DELAY}" download_file "${ASSET_URL}" "${DOWNLOAD_PATH}"; then
     rm -f "${DOWNLOAD_PATH}"
     fatal "Download failed after ${MAX_RETRIES} attempts." \
           "Check your network connection and try again."
@@ -385,10 +460,10 @@ fi
 DOWNLOAD_SIZE=$(stat -c%s "${DOWNLOAD_PATH}" 2>/dev/null || stat -f%z "${DOWNLOAD_PATH}" 2>/dev/null || echo "0")
 if (( DOWNLOAD_SIZE < 1000000 )); then
     warn "Downloaded file is unusually small ($(( DOWNLOAD_SIZE / 1024 ))KB)."
-    warn "Expected an AppImage (typically 50-200MB). The file may be corrupted."
+    warn "Expected a BLAXIN ${ASSET_KIND} artifact. The file may be corrupted."
 fi
 
-success "Downloaded: ${APPIMAGE_NAME} ($(numfmt --to=iec-i --suffix=B "${DOWNLOAD_SIZE}" 2>/dev/null || echo "${DOWNLOAD_SIZE} bytes"))"
+success "Downloaded: ${ASSET_NAME} ($(numfmt --to=iec-i --suffix=B "${DOWNLOAD_SIZE}" 2>/dev/null || echo "${DOWNLOAD_SIZE} bytes"))"
 
 # ═══════════════════════════════════════════════════════════════════════
 # Step 4: Verify Checksum
@@ -396,8 +471,8 @@ success "Downloaded: ${APPIMAGE_NAME} ($(numfmt --to=iec-i --suffix=B "${DOWNLOA
 header "Step 4/6: Verifying checksum"
 
 if [[ "${HAS_SHA256}" == "true" ]]; then
-    CHECKSUM_URL="${APPIMAGE_URL}.sha256"
-    CHECKSUM_PATH="${TEMP_DIR}/${APPIMAGE_NAME}.sha256"
+    CHECKSUM_URL="${ASSET_URL}.sha256"
+    CHECKSUM_PATH="${TEMP_DIR}/${ASSET_NAME}.sha256"
 
     # Try to download checksum file
     CHECKSUM_OK=false
@@ -451,39 +526,69 @@ if [[ "${EUID}" -ne 0 ]]; then
     fi
 fi
 
-# Create directories
-${SUDO} mkdir -p "${INSTALL_DIR}"
-${SUDO} mkdir -p "${BIN_DIR}"
-${SUDO} mkdir -p "${DESKTOP_DIR}"
-${SUDO} mkdir -p "${ICON_DIR}"
+if [[ "${INSTALL_METHOD}" == "deb" ]]; then
+    # ── .deb install (Debian-family) ─────────────────────────────────
+    info "Installing .deb package with dpkg..."
+    if ! ${SUDO} dpkg -i "${DOWNLOAD_PATH}"; then
+        warn "dpkg needs dependencies — running: apt-get install -f -y"
+        ${SUDO} apt-get install -f -y || fatal "Could not resolve package dependencies with apt."
+        if ! ${SUDO} dpkg -i "${DOWNLOAD_PATH}"; then
+            ${SUDO} apt-get install -y "${DOWNLOAD_PATH}" || \
+                fatal "Failed to install the .deb package (${ASSET_NAME})." \
+                      "Try manually: sudo apt install ./${ASSET_NAME}"
+        fi
+    fi
+    success "Installed package: ${APP_NAME} ${VERSION}"
 
-# Remove old installation if exists (idempotent)
-if [[ -f "${INSTALL_DIR}/${APPIMAGE_NAME}" ]]; then
-    info "Removing previous installation..."
-    # Find and remove old AppImages
-    find "${INSTALL_DIR}" -name "*.AppImage" -exec ${SUDO} rm -f {} \; 2>/dev/null || true
-    success "Cleaned previous installation"
-fi
+    # Guard against a stale /usr/local/bin/blaxin (e.g. a previous
+    # AppImage wrapper or third-party launcher) shadowing the packaged
+    # /usr/bin/blaxin that desktop menu entries resolve to.
+    if [[ -e "${BIN_DIR}/${APP_NAME}" ]]; then
+        STALE_REAL=$(readlink -f "${BIN_DIR}/${APP_NAME}" 2>/dev/null || echo "")
+        USR_BIN_REAL=$(readlink -f "/usr/bin/${APP_NAME}" 2>/dev/null || echo "")
+        if [[ -n "${STALE_REAL}" && "${STALE_REAL}" != "${USR_BIN_REAL}" ]]; then
+            BACKUP_NAME="${BIN_DIR}/${APP_NAME}.bak-stale"
+            ${SUDO} mv "${BIN_DIR}/${APP_NAME}" "${BACKUP_NAME}"
+            warn "Moved stale launcher ${BIN_DIR}/${APP_NAME} to ${BACKUP_NAME} so /usr/bin/${APP_NAME} is used."
+        fi
+    fi
 
-# Make AppImage executable
-chmod +x "${DOWNLOAD_PATH}"
+    INSTALL_PATH="/usr/bin/${APP_NAME}"
+else
+    # ── AppImage install (non-Debian or forced) ──────────────────────
+    # Create directories
+    ${SUDO} mkdir -p "${INSTALL_DIR}"
+    ${SUDO} mkdir -p "${BIN_DIR}"
+    ${SUDO} mkdir -p "${DESKTOP_DIR}"
+    ${SUDO} mkdir -p "${ICON_DIR}"
 
-# Install AppImage
-INSTALL_PATH="${INSTALL_DIR}/${APPIMAGE_NAME}"
-${SUDO} cp "${DOWNLOAD_PATH}" "${INSTALL_PATH}"
-${SUDO} chmod 755 "${INSTALL_PATH}"
-success "Installed AppImage to ${INSTALL_PATH}"
+    # Remove old installation if exists (idempotent)
+    if [[ -f "${INSTALL_DIR}/${ASSET_NAME}" ]]; then
+        info "Removing previous installation..."
+        # Find and remove old AppImages
+        find "${INSTALL_DIR}" -name "*.AppImage" -exec ${SUDO} rm -f {} \; 2>/dev/null || true
+        success "Cleaned previous installation"
+    fi
 
-# Create wrapper script in /usr/local/bin
-WRAPPER_CONTENT="#!/bin/bash
+    # Make AppImage executable
+    chmod +x "${DOWNLOAD_PATH}"
+
+    # Install AppImage
+    INSTALL_PATH="${INSTALL_DIR}/${ASSET_NAME}"
+    ${SUDO} cp "${DOWNLOAD_PATH}" "${INSTALL_PATH}"
+    ${SUDO} chmod 755 "${INSTALL_PATH}"
+    success "Installed AppImage to ${INSTALL_PATH}"
+
+    # Create wrapper script in /usr/local/bin
+    WRAPPER_CONTENT="#!/bin/bash
 exec \"${INSTALL_PATH}\" \"\$@\"
 "
-echo "${WRAPPER_CONTENT}" | ${SUDO} tee "${BIN_DIR}/${APP_NAME}" > /dev/null
-${SUDO} chmod 755 "${BIN_DIR}/${APP_NAME}"
-success "Created launcher: ${BIN_DIR}/${APP_NAME}"
+    echo "${WRAPPER_CONTENT}" | ${SUDO} tee "${BIN_DIR}/${APP_NAME}" > /dev/null
+    ${SUDO} chmod 755 "${BIN_DIR}/${APP_NAME}"
+    success "Created launcher: ${BIN_DIR}/${APP_NAME}"
 
-# Create .desktop file
-DESKTOP_CONTENT="[Desktop Entry]
+    # Create .desktop file
+    DESKTOP_CONTENT="[Desktop Entry]
 Type=Application
 Name=BLAXIN
 GenericName=AI Desktop Agent
@@ -497,49 +602,50 @@ Keywords=ai;agent;desktop;automation;assistant;
 StartupWMClass=blaxin
 MimeType=x-scheme-handler/blaxin;
 "
-echo "${DESKTOP_CONTENT}" | ${SUDO} tee "${DESKTOP_DIR}/${APP_NAME}.desktop" > /dev/null
-${SUDO} chmod 644 "${DESKTOP_DIR}/${APP_NAME}.desktop"
-success "Created desktop entry: ${DESKTOP_DIR}/${APP_NAME}.desktop"
+    echo "${DESKTOP_CONTENT}" | ${SUDO} tee "${DESKTOP_DIR}/${APP_NAME}.desktop" > /dev/null
+    ${SUDO} chmod 644 "${DESKTOP_DIR}/${APP_NAME}.desktop"
+    success "Created desktop entry: ${DESKTOP_DIR}/${APP_NAME}.desktop"
 
-# Try to extract icon from AppImage
-info "Extracting application icon..."
-TMP_EXTRACT="${TEMP_DIR}/extract"
-mkdir -p "${TMP_EXTRACT}"
+    # Try to extract icon from AppImage
+    info "Extracting application icon..."
+    TMP_EXTRACT="${TEMP_DIR}/extract"
+    mkdir -p "${TMP_EXTRACT}"
 
-if "${INSTALL_PATH}" --appimage-extract > /dev/null 2>&1; then
-    # Look for icon in standard locations
-    ICON_FOUND=false
-    for icon_path in \
-        "squashfs-root/usr/share/icons/hicolor/256x256/apps/blaxin.png" \
-        "squashfs-root/usr/share/icons/hicolor/128x128/apps/blaxin.png" \
-        "squashfs-root/usr/share/icons/hicolor/512x512/apps/blaxin.png" \
-        "squashfs-root/AppRun.png" \
-        "squashfs-root/*.png"; do
-        # Use glob matching for the last pattern
-        if [[ "${icon_path}" == *"*" ]]; then
-            for f in ${icon_path}; do
-                if [[ -f "${f}" ]]; then
-                    ${SUDO} cp "${f}" "${ICON_DIR}/blaxin.png"
-                    success "Extracted icon from AppImage"
-                    ICON_FOUND=true
-                    break 2
-                fi
-            done
-        elif [[ -f "${icon_path}" ]]; then
-            ${SUDO} cp "${icon_path}" "${ICON_DIR}/blaxin.png"
-            success "Extracted icon from AppImage"
-            ICON_FOUND=true
-            break
+    if "${INSTALL_PATH}" --appimage-extract > /dev/null 2>&1; then
+        # Look for icon in standard locations
+        ICON_FOUND=false
+        for icon_path in \
+            "squashfs-root/usr/share/icons/hicolor/256x256/apps/blaxin.png" \
+            "squashfs-root/usr/share/icons/hicolor/128x128/apps/blaxin.png" \
+            "squashfs-root/usr/share/icons/hicolor/512x512/apps/blaxin.png" \
+            "squashfs-root/AppRun.png" \
+            "squashfs-root/*.png"; do
+            # Use glob matching for the last pattern
+            if [[ "${icon_path}" == *"*" ]]; then
+                for f in ${icon_path}; do
+                    if [[ -f "${f}" ]]; then
+                        ${SUDO} cp "${f}" "${ICON_DIR}/blaxin.png"
+                        success "Extracted icon from AppImage"
+                        ICON_FOUND=true
+                        break 2
+                    fi
+                done
+            elif [[ -f "${icon_path}" ]]; then
+                ${SUDO} cp "${icon_path}" "${ICON_DIR}/blaxin.png"
+                success "Extracted icon from AppImage"
+                ICON_FOUND=true
+                break
+            fi
+        done
+
+        rm -rf squashfs-root 2>/dev/null || true
+
+        if [[ "${ICON_FOUND}" == "false" ]]; then
+            warn "Could not extract icon from AppImage"
         fi
-    done
-
-    rm -rf squashfs-root 2>/dev/null || true
-
-    if [[ "${ICON_FOUND}" == "false" ]]; then
-        warn "Could not extract icon from AppImage"
+    else
+        warn "Could not extract icon from AppImage (may require --appimage-extract support)"
     fi
-else
-    warn "Could not extract icon from AppImage (may require --appimage-extract support)"
 fi
 
 # Update desktop database and icon cache
@@ -560,25 +666,40 @@ header "Step 6/6: Verifying installation"
 
 INSTALLED=true
 
-if [[ -f "${INSTALL_PATH}" ]]; then
-    success "AppImage: ${INSTALL_PATH}"
+if [[ "${INSTALL_METHOD}" == "deb" ]]; then
+    if dpkg -s "${APP_NAME}" > /dev/null 2>&1; then
+        success "Package: ${APP_NAME} ${VERSION}"
+    else
+        error "Package ${APP_NAME} not found in dpkg database"
+        INSTALLED=false
+    fi
+    if [[ -x "${INSTALL_PATH}" ]]; then
+        success "Binary: ${INSTALL_PATH}"
+    else
+        error "Binary not found at ${INSTALL_PATH}"
+        INSTALLED=false
+    fi
 else
-    error "AppImage not found at ${INSTALL_PATH}"
-    INSTALLED=false
-fi
+    if [[ -f "${INSTALL_PATH}" ]]; then
+        success "AppImage: ${INSTALL_PATH}"
+    else
+        error "AppImage not found at ${INSTALL_PATH}"
+        INSTALLED=false
+    fi
 
-if [[ -x "${BIN_DIR}/${APP_NAME}" ]]; then
-    success "Launcher: ${BIN_DIR}/${APP_NAME}"
-else
-    error "Launcher not found at ${BIN_DIR}/${APP_NAME}"
-    INSTALLED=false
-fi
+    if [[ -x "${BIN_DIR}/${APP_NAME}" ]]; then
+        success "Launcher: ${BIN_DIR}/${APP_NAME}"
+    else
+        error "Launcher not found at ${BIN_DIR}/${APP_NAME}"
+        INSTALLED=false
+    fi
 
-if [[ -f "${DESKTOP_DIR}/${APP_NAME}.desktop" ]]; then
-    success "Desktop entry: ${DESKTOP_DIR}/${APP_NAME}.desktop"
-else
-    error "Desktop entry not found"
-    INSTALLED=false
+    if [[ -f "${DESKTOP_DIR}/${APP_NAME}.desktop" ]]; then
+        success "Desktop entry: ${DESKTOP_DIR}/${APP_NAME}.desktop"
+    else
+        error "Desktop entry not found"
+        INSTALLED=false
+    fi
 fi
 
 # Clean up temp directory
@@ -597,19 +718,35 @@ if [[ "${INSTALLED}" == "true" ]]; then
     echo "  ╚═══════════════════════════════════════════════╝"
     echo -e "${NC}"
     echo -e "  Version:    ${BOLD}${VERSION}${NC}"
-    echo -e "  Installed:  ${INSTALL_PATH}"
-    echo -e "  Launcher:   ${BIN_DIR}/${APP_NAME}"
-    echo ""
-    echo -e "  ${BOLD}To launch:${NC}"
-    echo "    • Open ${CYAN}BLAXIN${NC} from your application menu"
-    echo "    • Or run: ${CYAN}${APP_NAME}${NC}"
-    echo ""
-    echo -e "  ${BOLD}First run:${NC}"
-    echo "    BLAXIN will guide you through setup on first launch."
-    echo "    You'll configure your AI provider and select a model."
-    echo ""
-    echo -e "  ${BOLD}To uninstall:${NC}"
-    echo "    sudo rm -rf ${INSTALL_DIR} ${BIN_DIR}/${APP_NAME} ${DESKTOP_DIR}/${APP_NAME}.desktop ${ICON_DIR}/blaxin.png"
+    if [[ "${INSTALL_METHOD}" == "deb" ]]; then
+        echo -e "  Package:    ${APP_NAME}_${VERSION}_amd64.deb (installed via dpkg/apt)"
+        echo -e "  Binary:     ${INSTALL_PATH}"
+        echo ""
+        echo -e "  ${BOLD}To launch:${NC}"
+        echo "    • Open ${CYAN}BLAXIN${NC} from your application menu"
+        echo "    • Or run: ${CYAN}${APP_NAME}${NC}"
+        echo ""
+        echo -e "  ${BOLD}First run:${NC}"
+        echo "    BLAXIN will guide you through setup on first launch."
+        echo "    You'll configure your AI provider and select a model."
+        echo ""
+        echo -e "  ${BOLD}To uninstall:${NC}"
+        echo "    sudo apt remove ${APP_NAME}"
+    else
+        echo -e "  Installed:  ${INSTALL_PATH}"
+        echo -e "  Launcher:   ${BIN_DIR}/${APP_NAME}"
+        echo ""
+        echo -e "  ${BOLD}To launch:${NC}"
+        echo "    • Open ${CYAN}BLAXIN${NC} from your application menu"
+        echo "    • Or run: ${CYAN}${APP_NAME}${NC}"
+        echo ""
+        echo -e "  ${BOLD}First run:${NC}"
+        echo "    BLAXIN will guide you through setup on first launch."
+        echo "    You'll configure your AI provider and select a model."
+        echo ""
+        echo -e "  ${BOLD}To uninstall:${NC}"
+        echo "    sudo rm -rf ${INSTALL_DIR} ${BIN_DIR}/${APP_NAME} ${DESKTOP_DIR}/${APP_NAME}.desktop ${ICON_DIR}/blaxin.png"
+    fi
     echo ""
 else
     echo ""

@@ -154,6 +154,47 @@ One-command installation for Linux x86_64 downloads the latest stable release, v
 curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/install.sh | bash
 ```
 
+The installer is distro-aware:
+
+- **Debian-family distros (Debian / Ubuntu / Kali / Mint / Pop!_OS)**: installs
+the `.deb` package via `dpkg` (fixing dependencies with `apt-get install -f` if
+needed). The `.deb` runs against the system WebKitGTK, which is the most
+reliable configuration.
+- **Other distros**: installs the portable AppImage to `/opt/blaxin` with a
+launcher and desktop entry, as before.
+- Force the AppImage on any distro with `--appimage`:
+
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/install.sh | bash -s -- --appimage
+  ```
+
+## Linux distribution notes
+
+- **Debian / Ubuntu / Kali and other Debian-family distros**: use the `.deb`
+  package (`blaxin_<version>_amd64.deb` on the release page) — `install.sh`
+  does this automatically. It declares its dependencies
+  (`libwebkit2gtk-4.1-0`, `libgtk-3-0`, `libayatana-appindicator3-1`) and runs
+  against the distro's own WebKitGTK, which is the most reliable configuration.
+
+  ```bash
+  sudo apt install ./blaxin_1.1.1_amd64.deb   # or: sudo dpkg -i … && sudo apt-get install -f
+  blaxin
+  ```
+
+- **AppImage caveat**: the AppImage bundles the WebKitGTK/GTK/GLib stack of the
+  CI build machine. On some systems the bundled `WebKitWebProcess` cannot
+  initialize EGL and aborts with
+  `Could not create default EGL display: EGL_BAD_PARAMETER. Aborting...`,
+  which leaves the window blank (gray/black) even though the bundled backend
+  starts fine (`[BLAXIN] Server is ready!` appears). This is a known upstream
+  Tauri/WebKitGTK AppImage limitation (tauri#11988) and is not caused by
+  BLAXIN's own code — the identical build renders correctly when it runs
+  against the system WebKitGTK (e.g. via the `.deb`).
+
+  If the AppImage shows a blank window, use the `.deb` package instead. The
+  generic WebKit environment variables (`WEBKIT_DISABLE_DMABUF_RENDERER=1`,
+  `WEBKIT_DISABLE_COMPOSITING_MODE=1`) do **not** fix this failure mode.
+
 ## Tech Stack
 
 - **Server**: Node.js, TypeScript, Express, WebSocket

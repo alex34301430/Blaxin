@@ -248,6 +248,18 @@ class ProviderRegistry {
   }
 
   /**
+   * Pick a model id that `providerId` actually offers. Keeps the active
+   * model when it is in that provider's cached model list; otherwise
+   * falls back to the provider's first (preferably free) model. Without
+   * this, provider fallback reused the failed provider's model id, which
+   * the fallback provider would reject (e.g. "gpt-4o" sent to Groq).
+   */
+  getFallbackModel(providerId: ProviderId): string | null {
+    const cached = this.modelsCache.get(providerId);
+    return pickFallbackModel(this.activeModel, cached);
+  }
+
+  /**
    * Get fallback provider when active provider fails.
    * Returns the next healthy provider in the fallback chain.
    */
@@ -325,3 +337,22 @@ class ProviderRegistry {
 }
 
 export const providers = new ProviderRegistry();
+
+/**
+ * Pure model-picking logic for provider fallback (testable without a
+ * live registry): keep the active model when the fallback provider offers
+ * it, otherwise pick its first free model, then its first model.
+ */
+export function pickFallbackModel(
+  activeModel: string | null,
+  cachedModels: ModelInfo[] | undefined,
+): string | null {
+  if (!cachedModels || cachedModels.length === 0) {
+    return activeModel;
+  }
+  if (activeModel && cachedModels.some((m) => m.id === activeModel)) {
+    return activeModel;
+  }
+  const preferred = cachedModels.find((m) => m.isFree) || cachedModels[0];
+  return preferred?.id || null;
+}

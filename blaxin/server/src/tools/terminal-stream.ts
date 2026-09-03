@@ -12,6 +12,31 @@ interface TerminalSession {
 
 const sessions = new Map<string, TerminalSession>();
 
+/**
+ * Terminate every live terminal session (used during server shutdown).
+ * Each shell is killed by process-group signal so any child processes it
+ * started also die — without this, shells survive BLAXIN's exit and keep
+ * running as orphans.
+ */
+export function terminateAllSessions(): void {
+  for (const [id, session] of sessions) {
+    logger.info('terminal-ws', `Terminating session ${id} (pid ${session.process.pid})`);
+    try {
+      const pid = session.process.pid;
+      if (pid) {
+        // Negative PID targets the whole process group (best effort;
+        // the shell may not be a group leader if the OS refused it).
+        try {
+          process.kill(-pid, 'SIGTERM');
+        } catch {
+          process.kill(pid, 'SIGTERM');
+        }
+      }
+    } catch {}
+  }
+  sessions.clear();
+}
+
 export function handleTerminalWebSocket(ws: WebSocket): void {
   const sessionId = `term_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   

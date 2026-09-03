@@ -439,7 +439,13 @@ export class AgentOrchestrator {
               this.emit('activity', { type: 'thinking', content: `Switching to ${fallback.name} due to connection issues...` });
               provider = fallback;
               providerId = fallback.id;
-              modelId = this.activeModelForProvider(fallback.id) || modelId;
+              // The fallback provider may not offer the active model —
+              // pick one it actually has (see getFallbackModel).
+              const fallbackModel = providers.getFallbackModel(fallback.id);
+              if (fallbackModel) {
+                modelId = fallbackModel;
+                logger.info('orchestrator', `Fallback model for ${fallback.id}: ${fallbackModel}`);
+              }
               await this.sleep(1000);
             } else {
               await this.sleep(2000);
@@ -735,13 +741,6 @@ export class AgentOrchestrator {
   private isRetryableError(error: string): boolean {
     const retryable = ['timeout', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'network', 'temporary', 'EPIPE'];
     return retryable.some(r => error.toLowerCase().includes(r));
-  }
-
-  private activeModelForProvider(providerId: ProviderId): string | null {
-    const model = providers.getActiveModel();
-    if (!model) return null;
-    // If model belongs to different provider, try to find a compatible one
-    return model;
   }
 
   private describeToolAction(toolName: string, args: Record<string, unknown>): string {

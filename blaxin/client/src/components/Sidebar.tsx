@@ -205,7 +205,7 @@ export function Sidebar() {
           fontFamily: 'var(--font-mono)',
           letterSpacing: 1,
         }}>
-          BLAXIN v1.0.0
+          BLAXIN v1.1.1
         </div>
       </div>
     </aside>

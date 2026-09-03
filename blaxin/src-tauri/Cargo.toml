@@ -1,6 +1,6 @@
 [package]
 name = "blaxin"
-version = "1.0.0"
+version = "1.1.1"
 description = "BLAXIN — Personal AI Desktop Agent"
 authors = ["BLAXIN"]
 edition = "2021"
@@ -20,6 +20,19 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+# Update system: signed .deb self-update (Tauri's built-in updater only
+# supports AppImage on Linux, so deb installs get their own verifier).
+minisign-verify = "0.2"
+base64 = "0.22"
+sha2 = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
+libc = "0.2"
+
+[dev-dependencies]
+# Signing side used only by tests to generate minisign signatures.
+minisign = "0.9"
 
 [profile.release]
 strip = true

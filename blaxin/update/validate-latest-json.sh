@@ -8,8 +8,9 @@
 # Checks:
 #   - File exists and is valid JSON
 #   - Has required fields (version, notes, pub_date, platforms)
-#   - Signature is non-empty and has minisign format
-#   - URL points to correct artifact
+#   - AppImage signature is non-empty and has minisign format
+#   - AppImage URL points to the project's GitHub release and has a sha256
+#   - Optional .deb block (url, signature, sha256) is complete and valid
 #   - Version matches expected version (if provided)
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -81,13 +82,23 @@ fi
 # Check signature is non-empty and has minisign format
 SIG_CHECK=$(python3 -c "
 import json, sys
+import base64
 data = json.load(open('${JSON_FILE}'))
 sig = data.get('platforms', {}).get('linux-x86_64', {}).get('signature', '')
 if not sig:
     print('EMPTY')
     sys.exit(1)
-lines = sig.strip().split('\n')
-if len(lines) < 2:
+# Accept either raw minisign text or the single-line base64 form the
+# Tauri updater emits (both are accepted by the app's verifier).
+text = sig
+if 'untrusted comment' not in text:
+    try:
+        text = base64.b64decode(text).decode('utf-8')
+    except Exception:
+        print('INVALID_FORMAT')
+        sys.exit(1)
+lines = text.strip().split('\n')
+if not lines or 'untrusted comment' not in lines[0]:
     print('INVALID_FORMAT')
     sys.exit(1)
 print(f'OK:{len(sig)}:{len(lines)}')
@@ -96,7 +107,7 @@ print(f'OK:{len(sig)}:{len(lines)}')
 if [[ "${SIG_CHECK}" == "EMPTY" ]]; then
     error "Signature is empty — updater will not work"
 elif [[ "${SIG_CHECK}" == "INVALID_FORMAT" ]]; then
-    error "Signature does not have minisign format (needs at least 2 lines)"
+    error "Signature is neither raw minisign text nor Tauri base64 — updater will not work"
 elif [[ "${SIG_CHECK}" == OK:* ]]; then
     SIG_LEN=$(echo "${SIG_CHECK}" | cut -d: -f2)
     SIG_LINES=$(echo "${SIG_CHECK}" | cut -d: -f3)
@@ -105,27 +116,84 @@ else
     error "Unexpected signature check result: ${SIG_CHECK}"
 fi
 
-# Check URL format
+# Check URL format + sha256 on the AppImage entry
 URL_CHECK=$(python3 -c "
 import json, sys
 data = json.load(open('${JSON_FILE}'))
-url = data.get('platforms', {}).get('linux-x86_64', {}).get('url', '')
-if not url.startswith('https://github.com/'):
+p = data.get('platforms', {}).get('linux-x86_64', {})
+url = p.get('url', '')
+if not url.startswith('https://github.com/alex34301430/Blaxin/releases/download/'):
     print('INVALID_URL')
     sys.exit(1)
 if '.AppImage' not in url:
     print('NOT_APPIMAGE')
     sys.exit(1)
+sha = p.get('sha256', '')
+if len(sha) != 64:
+    print('NO_SHA256')
+    sys.exit(1)
 print('OK')
 " 2>&1) || true
 
 if [[ "${URL_CHECK}" == "OK" ]]; then
-    ok "URL format valid"
+    ok "AppImage URL + sha256 valid"
 elif [[ "${URL_CHECK}" == "NOT_APPIMAGE" ]]; then
     error "URL does not point to an AppImage"
+elif [[ "${URL_CHECK}" == "NO_SHA256" ]]; then
+    error "AppImage entry is missing its sha256"
 else
     error "URL format invalid"
 fi
+
+# Check the optional .deb block (url, signature, sha256 all together)
+DEB_CHECK=$(python3 -c "
+import json, sys
+data = json.load(open('${JSON_FILE}'))
+deb = data.get('deb')
+if deb is None:
+    print('ABSENT')
+    sys.exit(0)
+url = deb.get('url', '')
+sig = deb.get('signature', '')
+sha = deb.get('sha256', '')
+if not url.startswith('https://github.com/alex34301430/Blaxin/releases/download/'):
+    print('INVALID_URL')
+    sys.exit(1)
+if not url.endswith('.deb'):
+    print('NOT_DEB')
+    sys.exit(1)
+if len(sig) < 40:
+    print('EMPTY_SIG')
+    sys.exit(1)
+if len(sha) != 64:
+    print('BAD_SHA')
+    sys.exit(1)
+print('OK')
+" 2>&1) || true
+
+case "${DEB_CHECK}" in
+    ABSENT)
+        warn ".deb block absent — AppImage-only manifest (older release)"
+        ;;
+    OK)
+        ok ".deb block valid (url + signature + sha256)"
+        ;;
+    INVALID_URL)
+        error ".deb URL is not from the BLAXIN GitHub release"
+        ;;
+    NOT_DEB)
+        error ".deb URL does not end in .deb"
+        ;;
+    EMPTY_SIG)
+        error ".deb signature is empty — deb auto-update will refuse to install"
+        ;;
+    BAD_SHA)
+        error ".deb sha256 malformed"
+        ;;
+    *)
+        error "Unexpected .deb check result: ${DEB_CHECK}"
+        ;;
+esac
 
 # Check version if expected version provided
 if [[ -n "${EXPECTED_VERSION}" ]]; then

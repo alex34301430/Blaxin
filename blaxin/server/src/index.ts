@@ -5,7 +5,7 @@ import { createServer } from 'http';
 import { providers } from './providers/index.js';
 import { toolRegistry } from './tools/index.js';
 import { orchestrator } from './orchestrator/index.js';
-import { handleTerminalWebSocket } from './tools/terminal-stream.js';
+import { handleTerminalWebSocket, terminateAllSessions } from './tools/terminal-stream.js';
 import { logger } from './utils/logger.js';
 import { loadConfig, saveConfig } from './utils/config.js';
 import { credentialStore } from './utils/credentials.js';
@@ -19,6 +19,7 @@ import {
   isStateChangingRequestAllowed,
 } from './utils/security.js';
 import { isVersionNewer, isMajorVersionUpgrade } from './utils/semver.js';
+import { isValidUserMessage, normalizeUserMessage } from './utils/validation.js';
 import { APP_VERSION, GITHUB_REPO, GITHUB_RELEASES_URL } from './utils/version.js';
 import { ProviderId, AppConfig } from './types.js';
 
@@ -219,8 +220,8 @@ app.put('/api/config', (req, res) => {
 // Agent endpoints
 app.post('/api/agent/message', async (req, res) => {
   const { message } = req.body;
-  if (!message) {
-    return res.status(400).json({ error: 'Message is required' });
+  if (!isValidUserMessage(message)) {
+    return res.status(400).json({ error: 'Message is required', code: 'EMPTY_MESSAGE' });
   }
   
   // Start processing in background, WebSocket will deliver updates
@@ -346,9 +347,18 @@ wss.on('connection', (ws) => {
       const msg = JSON.parse(data.toString());
       
       switch (msg.type) {
-        case 'user-message':
-          await orchestrator.processMessage(msg.data.content);
+        case 'user-message': {
+          const content = msg.data?.content;
+          if (!isValidUserMessage(content)) {
+            ws.send(JSON.stringify({
+              event: 'error',
+              data: { message: 'Message content is required.', code: 'EMPTY_MESSAGE' },
+            }));
+            break;
+          }
+          await orchestrator.processMessage(normalizeUserMessage(content));
           break;
+        }
         case 'stop':
           orchestrator.stop();
           break;
@@ -426,6 +436,9 @@ server.listen(PORT, HOST, async () => {
 const shutdown = () => {
   logger.info('server', 'Shutting down...');
   sessionState.stopAutoSave();
+  // Kill any live terminal shells (and their children) so no processes
+  // survive the backend exit.
+  terminateAllSessions();
   wss.clients.forEach(client => {
     try { client.close(1001, 'Server shutting down'); } catch {}
   });

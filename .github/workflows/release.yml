@@ -53,7 +53,8 @@ jobs:
             libgtk-3-dev \
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
-            imagemagick
+            imagemagick \
+            minisign
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli
@@ -142,6 +143,11 @@ jobs:
           VERSION="${{ steps.version.outputs.version_num }}"
           echo "Setting version to $VERSION across all components"
 
+          # Source-of-truth version file (kept in sync with the tag so
+          # scripts/release.sh and blaxin/VERSION never disagree with the
+          # release). This step runs with working-directory: blaxin.
+          echo "$VERSION" > VERSION
+
           # Update server version
           cd server
           npm version "$VERSION" --no-git-tag-version --allow-same-version 2>/dev/null || true
@@ -167,6 +173,11 @@ jobs:
           if [ -f version.ts ]; then
             sed -i "s/export const APP_VERSION = '.*'/export const APP_VERSION = '$VERSION'/" version.ts
           fi
+          cd ../../..
+
+          # Update the client Sidebar version label
+          cd client/src/components
+          sed -i "s|BLAXIN v[0-9.]*|BLAXIN v$VERSION|" Sidebar.tsx
           cd ../../..
 
           echo "All versions updated to $VERSION"
@@ -291,74 +302,89 @@ jobs:
             fi
           done
 
-      - name: Generate update manifest (latest.json)
+      - name: Sign .deb package (same minisign key as the AppImage)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          VERSION="${{ steps.version.outputs.version_num }}"
+          DEB="artifacts/blaxin_${VERSION}_amd64.deb"
+          SIG="artifacts/blaxin_${VERSION}_amd64.deb.sig"
+          if [ ! -f "$DEB" ]; then
+            echo "ERROR: deb not found at $DEB"
+            exit 1
+          fi
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "ERROR: TAURI_SIGNING_PRIVATE_KEY is not set — cannot sign the deb"
+            exit 1
+          fi
+
+          KEY_FILE="$(mktemp)"
+          trap 'rm -f "$KEY_FILE"' EXIT
+
+          # The secret is either the raw minisign secret-key text or base64 of it
+          if printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | head -1 | grep -q "untrusted comment"; then
+            printf '%s\n' "$TAURI_SIGNING_PRIVATE_KEY" > "$KEY_FILE"
+          else
+            printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | base64 -d > "$KEY_FILE" 2>/dev/null
+          fi
+          if [ ! -s "$KEY_FILE" ]; then
+            echo "ERROR: could not decode the signing key"
+            exit 1
+          fi
+
+          sign_deb() {
+            if [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
+              minisign -S -s "$KEY_FILE" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" -m "$DEB" -x "$SIG"
+            else
+              minisign -S -s "$KEY_FILE" -m "$DEB" -x "$SIG"
+            fi
+          }
+
+          if ! sign_deb; then
+            echo "WARN: direct signing failed — retrying without password (key may be unencrypted)"
+            minisign -S -s "$KEY_FILE" -m "$DEB" -x "$SIG" || {
+              echo "ERROR: could not sign the deb package"
+              exit 1
+            }
+          fi
+
+          echo "✓ Signed .deb package"
+          ls -la "$SIG"
+
+      - name: Generate update manifest (latest.json v2)
         id: manifest
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           VERSION_NUM="${{ steps.version.outputs.version_num }}"
 
-          # For Tauri v2 Linux AppImage updates with createUpdaterArtifacts:
-          # The update artifact IS the AppImage itself (not a .tar.gz)
-          # The download URL points directly to the AppImage in the release
-          DOWNLOAD_URL="https://github.com/alex34301430/Blaxin/releases/download/${VERSION}/BLAXIN_${VERSION_NUM}_amd64.AppImage"
-
-          # Read the Tauri-generated AppImage signature content
-          SIG_FILE="artifacts/BLAXIN_${VERSION_NUM}_amd64.AppImage.sig"
-          if [ ! -f "$SIG_FILE" ] || [ ! -s "$SIG_FILE" ]; then
-            echo "ERROR: No valid signature file found at $SIG_FILE"
+          if [ ! -s "artifacts/BLAXIN_${VERSION_NUM}_amd64.AppImage.sig" ]; then
+            echo "ERROR: No valid AppImage signature file found"
+            exit 1
+          fi
+          if [ ! -s "artifacts/blaxin_${VERSION_NUM}_amd64.deb.sig" ]; then
+            echo "ERROR: No valid deb signature file found"
             exit 1
           fi
 
-          # Use Python to generate valid JSON. Tauri v2 AppImage updater
-          # signatures are a single line of base64 (not multi-line minisign),
-          # so embedding them as JSON string values needs no newline handling.
-          python3 -c "
-          import json, datetime, sys, base64
+          python3 blaxin/update/build-manifest.py \
+            --version "$VERSION_NUM" \
+            --notes "BLAXIN v$VERSION — See https://github.com/alex34301430/Blaxin/releases/tag/$VERSION for details." \
+            --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --appimage-url "https://github.com/alex34301430/Blaxin/releases/download/${VERSION}/BLAXIN_${VERSION_NUM}_amd64.AppImage" \
+            --appimage-sig "artifacts/BLAXIN_${VERSION_NUM}_amd64.AppImage.sig" \
+            --appimage-sha256 "$(awk '{print $1}' "artifacts/BLAXIN_${VERSION_NUM}_amd64.AppImage.sha256")" \
+            --deb-url "https://github.com/alex34301430/Blaxin/releases/download/${VERSION}/blaxin_${VERSION_NUM}_amd64.deb" \
+            --deb-sig "artifacts/blaxin_${VERSION_NUM}_amd64.deb.sig" \
+            --deb-sha256 "$(awk '{print $1}' "artifacts/blaxin_${VERSION_NUM}_amd64.deb.sha256")" \
+            --out artifacts/latest.json
 
-          sig_content = open('$SIG_FILE').read().strip()
-          if not sig_content:
-              print('ERROR: signature is empty')
-              sys.exit(1)
+          echo "=== Generated manifest ==="
+          cat artifacts/latest.json
 
-          lines = sig_content.split('\n')
-          print(f'Signature: {len(sig_content)} chars, {len(lines)} line(s)')
-          if len(sig_content) < 50:
-              print('ERROR: Signature is too short to be valid')
-              sys.exit(1)
-          try:
-              base64.b64decode(sig_content, validate=True)
-          except Exception:
-              print('ERROR: Signature is not valid base64')
-              sys.exit(1)
-
-          manifest = {
-              'version': '$VERSION_NUM',
-              'notes': 'BLAXIN $VERSION — See https://github.com/alex34301430/Blaxin/releases/tag/$VERSION for details.',
-              'pub_date': datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
-              'platforms': {
-                  'linux-x86_64': {
-                      'signature': sig_content,
-                      'url': '$DOWNLOAD_URL'
-                  }
-              }
-          }
-
-          with open('artifacts/latest.json', 'w') as f:
-              json.dump(manifest, f, indent=2)
-
-          print('Generated update manifest')
-          with open('artifacts/latest.json') as f:
-              print(f.read())
-
-          # Verify
-          with open('artifacts/latest.json') as f:
-              data = json.load(f)
-          sig = data['platforms']['linux-x86_64']['signature']
-          if not sig:
-              print('ERROR: signature is empty in generated JSON')
-              sys.exit(1)
-          print(f'✓ JSON valid, signature: {len(sig)} chars')
-          "
+      - name: Validate update manifest
+        run: |
+          bash blaxin/update/validate-latest-json.sh artifacts/latest.json "${{ steps.version.outputs.version_num }}"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -368,6 +394,7 @@ jobs:
             artifacts/*.AppImage
             artifacts/*.AppImage.sig
             artifacts/*.deb
+            artifacts/*.deb.sig
             artifacts/*.sha256
             artifacts/latest.json
           retention-days: 30
@@ -439,6 +466,19 @@ jobs:
             exit 1
           fi
           echo "✓ .deb: $(stat -c%s artifacts/blaxin_${VERSION}_amd64.deb | numfmt --to=iec-i)"
+
+          # Check .deb signature exists (needed for automatic .deb updates)
+          if [ ! -s "artifacts/blaxin_${VERSION}_amd64.deb.sig" ]; then
+            echo "ERROR: .deb signature not found or empty!"
+            exit 1
+          fi
+          echo "✓ .deb signature: $(wc -c < "artifacts/blaxin_${VERSION}_amd64.deb.sig") bytes"
+          # The manifest must carry the deb entry with a signature + sha256
+          if ! python3 -c "import json, sys; data = json.load(open('artifacts/latest.json')); deb = data.get('deb') or {}; sys.exit(0) if (len(deb.get('signature', '')) >= 40 and len(deb.get('sha256', '')) == 64) else sys.exit(1)"; then
+            echo "ERROR: deb entry in latest.json is incomplete or missing"
+            exit 1
+          fi
+          echo "✓ latest.json carries signed deb entry"
 
           # Check latest.json exists and has correct URL
           if [ ! -f "artifacts/latest.json" ]; then
@@ -515,6 +555,7 @@ jobs:
             artifacts/*.AppImage
             artifacts/*.AppImage.sig
             artifacts/*.deb
+            artifacts/*.deb.sig
             artifacts/*.sha256
             artifacts/latest.json
         env:
