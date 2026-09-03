@@ -520,11 +520,17 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # The release job checks out the tag, which leaves a detached HEAD;
+      # a bare `git push` from detached HEAD fails, so the manifest never
+      # landed on main for tag-triggered runs. Switch to the main branch
+      # (main is always an ancestor of the tag commit) before committing.
       - name: Commit update manifest back to repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin main
+          git checkout main
           cp artifacts/latest.json blaxin/update/latest.json
           git add blaxin/update/latest.json
           git commit -m "chore: update latest.json for ${{ steps.manifest.outputs.version }}" || echo "No changes to commit"
-          git push || echo "Could not push update manifest (non-critical)"
+          git push origin main || echo "Could not push update manifest (non-critical)"

@@ -1,11 +1,11 @@
 {
-  "version": "1.0.2",
-  "notes": "BLAXIN v1.0.2 — See https://github.com/alex34301430/Blaxin/releases/tag/v1.0.2 for details.",
-  "pub_date": "2026-09-02T13:42:57Z",
+  "version": "1.1.0",
+  "notes": "BLAXIN v1.1.0 \u2014 See https://github.com/alex34301430/Blaxin/releases/tag/v1.1.0 for details.",
+  "pub_date": "2026-09-03T09:24:51Z",
   "platforms": {
     "linux-x86_64": {
-      "signature": "",
-      "url": "https://github.com/alex34301430/Blaxin/releases/download/v1.0.2/BLAXIN_1.0.2_amd64.AppImage"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTcTRPa3l4NjJhTy94UUpqbnZ5emhBN3FwaHdYYytLanF0cFF1akpEQkJOd3FYNk5tYllhdUhLQm1zdkx2NVBtYUZFT3RGMzJNblFoRDRWYjZRaTBRbHh6a29reERhbHdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NDI3NDkwCWZpbGU6QkxBWElOXzEuMS4wX2FtZDY0LkFwcEltYWdlCnJvdWpMWktrVFFXQmxmTFlINEsrTUdDMDJPM1R4S0dxTjhtR3QwMk1NanlRR0pkVGhDeUZnT1dJaC96RzN0NTR4YzZiM2RpeVpLMDJpRGdmM0Y3bkRnPT0K",
+      "url": "https://github.com/alex34301430/Blaxin/releases/download/v1.1.0/BLAXIN_1.1.0_amd64.AppImage"
     }
   }
 }
