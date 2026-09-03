@@ -5,6 +5,7 @@ import { ActivityPanel } from './components/ActivityPanel';
 import { TerminalPanel } from './components/TerminalPanel';
 import { SettingsModal } from './components/SettingsModal';
 import { StatusBar } from './components/StatusBar';
+import { ConfirmationModal } from './components/ConfirmationModal';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { SetupWizard } from './components/SetupWizard';
 import { UpdateNotifier } from './components/UpdateNotifier';
@@ -16,8 +17,8 @@ import './theme/cyberpunk.css';
 const SETUP_KEY = 'blaxin-setup-complete';
 
 export default function App() {
-  const { connected, settingsOpen, sidebarOpen, currentPage, activeModel } = useAppStore();
-  const { sendMessage, stopAgent, clearHistory } = useWebSocket();
+  const { connected, settingsOpen, sidebarOpen, currentPage, activeModel, pendingConfirmation } = useAppStore();
+  const { sendMessage, stopAgent, clearHistory, respondToConfirmation } = useWebSocket();
   const [showSetup, setShowSetup] = useState(false);
 
   // First-run detection
@@ -89,6 +90,7 @@ export default function App() {
       {settingsOpen && <SettingsModal />}
       {showSetup && <SetupWizard onComplete={handleSetupComplete} />}
       {!showSetup && <UpdateNotifier />}
+      {pendingConfirmation && <ConfirmationModal onRespond={respondToConfirmation} />}
     </div>
   );
 }

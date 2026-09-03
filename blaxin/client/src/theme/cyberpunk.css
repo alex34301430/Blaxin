@@ -98,7 +98,29 @@ body {
   100% { background-position: 200% 0; }
 }
 
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes pulse-soft {
+  0%, 100% { opacity: 0.55; }
+  50% { opacity: 1; }
+}
+
 /* Utility Classes */
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+.pulse-soft {
+  animation: pulse-soft 1.2s ease-in-out infinite;
+}
 .glass-panel {
   background: var(--bg-panel);
   border: 1px solid var(--border-primary);
@@ -220,6 +242,29 @@ button {
   border: none;
   outline: none;
   transition: all 0.2s;
+}
+
+/* Keyboard accessibility: visible focus rings for every interactive element */
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* Respect reduced-motion preferences: never force animation on users
+   who ask for motion-free UIs */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* App Layout */

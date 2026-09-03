@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { api } from '../services/api';
-import { FiDownload, FiExternalLink, FiX, FiCheck, FiLoader, FiAlertTriangle, FiRefreshCw } from 'react-icons/fi';
+import { FiDownload, FiExternalLink, FiX, FiLoader, FiAlertTriangle, FiRefreshCw } from 'react-icons/fi';
 
 interface UpdateInfo {
   updateAvailable: boolean;
@@ -80,9 +80,9 @@ export function UpdateNotifier() {
         }
       }
 
-      // Fallback to API check
-      const result = await fetch('/api/update/check');
-      const data = await result.json();
+      // Fallback to API check (uses the same endpoint resolution as
+      // the rest of the app, and tolerates empty/non-JSON responses)
+      const data = await api.updateCheck();
       setUpdateInfo(data);
       
       if (data.updateAvailable && data.latestVersion !== dismissed) {

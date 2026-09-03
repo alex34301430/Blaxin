@@ -38,6 +38,7 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
   const [apiKey, setApiKey] = useState('');
   const [apiKeyStatus, setApiKeyStatus] = useState<'idle' | 'validating' | 'valid' | 'invalid'>('idle');
   const [apiKeyError, setApiKeyError] = useState<string | null>(null);
+  const [apiKeyErrorCode, setApiKeyErrorCode] = useState<string | null>(null);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [freeModels, setFreeModels] = useState<ModelInfo[]>([]);
   const [selectedModel, setSelectedModel] = useState<ModelInfo | null>(null);
@@ -106,6 +107,7 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
     if (!selectedProvider || !apiKey.trim()) return;
     setApiKeyStatus('validating');
     setApiKeyError(null);
+    setApiKeyErrorCode(null);
 
     try {
       const result = await api.saveKey(selectedProvider, apiKey);
@@ -127,10 +129,42 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
       } else {
         setApiKeyStatus('invalid');
         setApiKeyError(result.error || 'Validation failed');
+        setApiKeyErrorCode(result.code || null);
       }
     } catch (err: any) {
       setApiKeyStatus('invalid');
       setApiKeyError(err.message);
+      setApiKeyErrorCode(err.code || null);
+    }
+  };
+
+  // Some failures mean "we could not reach the provider" rather than
+  // "this key is wrong". In that case the key is structurally valid and
+  // may still be saved — it will be verified live on first use.
+  const isNetworkTypeFailure = (code: string | null) =>
+    !!code && (code.includes('NETWORK') || code.includes('TIMEOUT') || code.includes('SERVER'));
+
+  const saveKeyWithoutValidation = async () => {
+    if (!selectedProvider || !apiKey.trim()) return;
+    setApiKeyStatus('validating');
+    setApiKeyError(null);
+    setApiKeyErrorCode(null);
+    try {
+      const result = await api.saveKey(selectedProvider, apiKey, { skipValidation: true });
+      if (result.valid) {
+        setApiKeyStatus('valid');
+        const allModels = await api.getAllModels();
+        setModels(allModels);
+        setFreeModels(allModels.filter((m: ModelInfo) => m.isFree));
+      } else {
+        setApiKeyStatus('invalid');
+        setApiKeyError(result.error || 'Validation failed');
+        setApiKeyErrorCode(result.code || null);
+      }
+    } catch (err: any) {
+      setApiKeyStatus('invalid');
+      setApiKeyError(err.message);
+      setApiKeyErrorCode(err.code || null);
     }
   };
 
@@ -294,7 +328,18 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
           {providers.map(p => (
             <button
               key={p.id}
-              onClick={() => setSelectedProvider(p.id)}
+              onClick={() => {
+                setSelectedProvider(p.id);
+                // Reset key state when switching providers to avoid
+                // confusing cross-provider validation state
+                setApiKey('');
+                setApiKeyStatus('idle');
+                setApiKeyError(null);
+                setApiKeyErrorCode(null);
+                setModels([]);
+                setFreeModels([]);
+                setSelectedModel(null);
+              }}
               style={{
                 display: 'flex', alignItems: 'center', gap: 12, padding: '14px 16px',
                 background: selectedProvider === p.id ? 'var(--bg-active)' : 'var(--bg-primary)',
@@ -359,8 +404,12 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
             <input
               type="password"
               value={apiKey}
-              onChange={e => { setApiKey(e.target.value); setApiKeyStatus('idle'); setApiKeyError(null); }}
+              onChange={e => { setApiKey(e.target.value); setApiKeyStatus('idle'); setApiKeyError(null); setApiKeyErrorCode(null); }}
               placeholder={`Enter your ${selectedProvider || 'provider'} API key`}
+              autoComplete="off"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
               style={{ flex: 1 }}
               onKeyDown={e => e.key === 'Enter' && validateAndSaveKey()}
             />
@@ -391,8 +440,36 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
               <div style={{ fontWeight: 600, marginBottom: 4 }}>What happened:</div>
               {apiKeyError}
               <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-muted)' }}>
-                What to do: Check that your key is correct and active at the provider's website.
+                What to do: {isNetworkTypeFailure(apiKeyErrorCode)
+                  ? 'BLAXIN could not reach the provider to verify the key. This usually means a network problem — not a bad key. You can retry, or save the key and it will be verified the first time it is used.'
+                  : 'Check that your key is correct and active at the provider\'s website. Keys are validated against the provider server, not by format alone.'}
               </div>
+              {isNetworkTypeFailure(apiKeyErrorCode) && (
+                <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+                  <button
+                    onClick={saveKeyWithoutValidation}
+                    disabled={apiKeyStatus === 'validating'}
+                    style={{
+                      padding: '6px 12px', background: 'var(--bg-tertiary)', color: 'var(--text-primary)',
+                      borderRadius: 'var(--radius-sm)', fontSize: 12, border: '1px solid var(--border-subtle)',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                    }}
+                  >
+                    <FiKey size={11} /> Save key without validation
+                  </button>
+                  <button
+                    onClick={validateAndSaveKey}
+                    disabled={apiKeyStatus === 'validating'}
+                    style={{
+                      padding: '6px 12px', background: 'rgba(0, 240, 255, 0.1)', color: 'var(--accent-primary)',
+                      borderRadius: 'var(--radius-sm)', fontSize: 12, border: '1px solid rgba(0, 240, 255, 0.3)',
+                      display: 'flex', alignItems: 'center', gap: 6,
+                    }}
+                  >
+                    <FiRefreshCw size={11} /> Retry
+                  </button>
+                </div>
+              )}
             </div>
           )}
 

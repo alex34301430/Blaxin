@@ -44,9 +44,25 @@ interface AppState {
   // Agent
   agentState: AgentState;
   setAgentState: (state: AgentState) => void;
+  agentDescription: string | null;
+  setAgentDescription: (desc: string | null) => void;
   messages: ChatMessage[];
   addMessage: (msg: ChatMessage) => void;
   clearMessages: () => void;
+
+  // Confirmation requests from the agent (high-impact tool actions)
+  pendingConfirmation: {
+    taskId?: string;
+    stepId?: string;
+    description: string;
+    action: string;
+  } | null;
+  setPendingConfirmation: (conf: {
+    taskId?: string;
+    stepId?: string;
+    description: string;
+    action: string;
+  } | null) => void;
 
   // Tools
   toolExecutions: ToolExecution[];
@@ -92,9 +108,14 @@ export const useAppStore = create<AppState>((set) => ({
 
   agentState: 'idle',
   setAgentState: (state) => set({ agentState: state }),
+  agentDescription: null,
+  setAgentDescription: (desc) => set({ agentDescription: desc }),
   messages: [],
   addMessage: (msg) => set((s) => ({ messages: [...s.messages, msg] })),
   clearMessages: () => set({ messages: [] }),
+
+  pendingConfirmation: null,
+  setPendingConfirmation: (conf) => set({ pendingConfirmation: conf }),
 
   toolExecutions: [],
   addToolExecution: (exec) => set((s) => ({

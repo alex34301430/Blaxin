@@ -14,7 +14,7 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const { messages, agentState, lastError, setLastError, ttsEnabled, setTtsEnabled, voiceEnabled, setVoiceEnabled } = useAppStore();
+  const { messages, agentState, agentDescription, lastError, setLastError, ttsEnabled, setTtsEnabled, voiceEnabled, setVoiceEnabled } = useAppStore();
 
   // Convert errors to visible messages in chat
   useEffect(() => {
@@ -34,7 +34,7 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
     }
   }, [lastError]);
 
-  const { startListening, stopListening, speak, stopSpeaking, isSupported, isListening } = useVoice({
+  const { startListening, stopListening, speak, stopSpeaking, isSupported, isListening, isSpeaking } = useVoice({
     onFinalTranscript: useCallback((transcript: string) => {
       setInput(prev => prev ? prev + ' ' + transcript : transcript);
     }, []),
@@ -202,11 +202,16 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
               ))}
             </div>
             <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, textTransform: 'uppercase', letterSpacing: 1 }}>
-              {agentState === 'thinking' && 'Processing...'}
-              {agentState === 'executing' && 'Executing action...'}
-              {agentState === 'planning' && 'Planning steps...'}
-              {agentState === 'observing' && 'Observing result...'}
-              {agentState === 'waiting' && 'Waiting...'}
+              {agentDescription || (
+                <>
+                  {agentState === 'thinking' && 'Processing...'}
+                  {agentState === 'executing' && 'Executing action...'}
+                  {agentState === 'planning' && 'Planning steps...'}
+                  {agentState === 'observing' && 'Observing result...'}
+                  {agentState === 'waiting' && 'Waiting...'}
+                  {agentState === 'requires-confirmation' && 'Awaiting approval...'}
+                </>
+              )}
             </span>
           </div>
         )}
@@ -267,17 +272,18 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
                   width: 36,
                   height: 36,
                   borderRadius: 'var(--radius-md)',
-                  background: ttsEnabled ? 'rgba(0, 240, 255, 0.1)' : 'var(--bg-tertiary)',
-                  color: ttsEnabled ? 'var(--accent-primary)' : 'var(--text-muted)',
+                  background: isSpeaking ? 'rgba(0, 255, 136, 0.15)' : ttsEnabled ? 'rgba(0, 240, 255, 0.1)' : 'var(--bg-tertiary)',
+                  color: isSpeaking ? 'var(--accent-green)' : ttsEnabled ? 'var(--accent-primary)' : 'var(--text-muted)',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  border: '1px solid var(--border-subtle)',
+                  border: `1px solid ${isSpeaking ? 'rgba(0, 255, 136, 0.4)' : 'var(--border-subtle)'}`,
+                  boxShadow: isSpeaking ? '0 0 12px rgba(0, 255, 136, 0.25)' : 'none',
                   transition: 'all 0.2s',
                 }}
-                title={ttsEnabled ? 'Disable voice output' : 'Enable voice output'}
+                title={isSpeaking ? 'BLAXIN is speaking' : ttsEnabled ? 'Disable voice output' : 'Enable voice output'}
               >
-                {ttsEnabled ? <FiVolume2 size={14} /> : <FiVolumeX size={14} />}
+                {isSpeaking ? <FiVolume2 size={14} className="pulse-soft" /> : ttsEnabled ? <FiVolume2 size={14} /> : <FiVolumeX size={14} />}
               </button>
             </div>
           )}

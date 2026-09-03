@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAppStore } from '../utils/store';
-import { FiWifi, FiWifiOff, FiCpu, FiSquare, FiTrash2 } from 'react-icons/fi';
+import { FiWifi, FiWifiOff, FiCpu, FiSquare, FiTrash2, FiMic } from 'react-icons/fi';
 
 const stateColors: Record<string, string> = {
   idle: 'var(--text-muted)',
@@ -27,7 +27,9 @@ const stateLabels: Record<string, string> = {
 };
 
 export function StatusBar({ onStop, onClear }: { onStop: () => void; onClear: () => void }) {
-  const { connected, agentState, activeProvider, activeModel, messages } = useAppStore();
+  const { connected, agentState, agentDescription, activeProvider, activeModel, messages, isListening } = useAppStore();
+
+  const showActivity = agentState !== 'idle' && agentState !== 'completed' && agentState !== 'error';
 
   return (
     <div style={{
@@ -107,7 +109,42 @@ export function StatusBar({ onStop, onClear }: { onStop: () => void; onClear: ()
         </div>
       )}
 
-      <div style={{ flex: 1 }} />
+      {/* Live activity description — the user always knows what BLAXIN is doing */}
+      <div style={{
+        flex: 1,
+        minWidth: 0,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'flex-end',
+        overflow: 'hidden',
+        padding: '0 8px',
+      }}>
+        {showActivity && (
+          <div style={{
+            color: 'var(--accent-primary)',
+            fontSize: 11,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            maxWidth: '100%',
+          }}>
+            ▸ {agentDescription || 'Working...'}
+          </div>
+        )}
+        {isListening && (
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 5,
+            color: 'var(--accent-red)',
+            marginLeft: 12,
+            whiteSpace: 'nowrap',
+          }}>
+            <FiMic size={11} />
+            <span style={{ letterSpacing: 1, animation: 'pulse-glow 1s ease-in-out infinite' }}>LISTENING</span>
+          </div>
+        )}
+      </div>
 
       {/* Message count */}
       <div style={{
@@ -115,6 +152,7 @@ export function StatusBar({ onStop, onClear }: { onStop: () => void; onClear: ()
         display: 'flex',
         alignItems: 'center',
         gap: 6,
+        whiteSpace: 'nowrap',
       }}>
         {messages.length} messages
       </div>

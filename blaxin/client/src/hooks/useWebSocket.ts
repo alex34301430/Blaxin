@@ -1,15 +1,18 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../utils/store';
+import { getWsUrl } from '../services/endpoints';
 
-// Build WebSocket URL relative to current page — works behind reverse proxy
-const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws`;
+const HEARTBEAT_INTERVAL_MS = 25000;
+const RECONNECT_DELAY_MS = 3000;
 
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null);
+  const heartbeatRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const {
     setConnected,
     setAgentState,
+    setAgentDescription,
     addMessage,
     addToolExecution,
     setProviders,
@@ -17,24 +20,34 @@ export function useWebSocket() {
     setActiveModel,
     setModels,
     setLastError,
+    setPendingConfirmation,
   } = useAppStore();
 
   const connect = useCallback(() => {
     if (wsRef.current?.readyState === WebSocket.OPEN) return;
 
     try {
-      const ws = new WebSocket(WS_URL);
+      const ws = new WebSocket(getWsUrl('/ws'));
       wsRef.current = ws;
 
       ws.onopen = () => {
         setConnected(true);
         console.log('[BLAXIN] WebSocket connected');
+
+        // Heartbeat keeps dead connections from lingering silently
+        if (heartbeatRef.current) clearInterval(heartbeatRef.current);
+        heartbeatRef.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, HEARTBEAT_INTERVAL_MS);
       };
 
       ws.onclose = () => {
         setConnected(false);
+        if (heartbeatRef.current) clearInterval(heartbeatRef.current);
         console.log('[BLAXIN] WebSocket disconnected, reconnecting...');
-        reconnectTimerRef.current = setTimeout(connect, 3000);
+        reconnectTimerRef.current = setTimeout(connect, RECONNECT_DELAY_MS);
       };
 
       ws.onerror = (error) => {
@@ -44,10 +57,13 @@ export function useWebSocket() {
       ws.onmessage = (event) => {
         try {
           const { event: eventType, data } = JSON.parse(event.data);
-          
+
           switch (eventType) {
             case 'connected':
-              if (data.state) setAgentState(data.state);
+              if (data.state) {
+                setAgentState(data.state);
+                setAgentDescription(data.description || null);
+              }
               if (data.activeProvider) setActiveProvider(data.activeProvider);
               if (data.activeModel) setActiveModel(data.activeModel);
               break;
@@ -63,6 +79,11 @@ export function useWebSocket() {
 
             case 'agent-state':
               setAgentState(data.state);
+              setAgentDescription(data.description || null);
+              // When the agent goes idle/completed/error, drop stale confirmations
+              if (['idle', 'completed', 'error'].includes(data.state)) {
+                setPendingConfirmation(null);
+              }
               break;
 
             case 'tool-execution':
@@ -82,6 +103,17 @@ export function useWebSocket() {
               setModels(data);
               break;
 
+            case 'confirmation-required':
+              if (data && data.description) {
+                setPendingConfirmation({
+                  taskId: data.taskId,
+                  stepId: data.stepId,
+                  description: data.description,
+                  action: typeof data.action === 'string' ? data.action : JSON.stringify(data.action || {}),
+                });
+              }
+              break;
+
             case 'activity':
               // Activity updates from the agent (thinking, executing, etc.)
               if (data && data.type && data.content) {
@@ -94,21 +126,10 @@ export function useWebSocket() {
               }
               break;
 
-            case 'confirmation-required':
-              // Handle confirmation requests
-              if (data && data.description) {
-                useAppStore.getState().setLastError(
-                  `Confirmation needed: ${data.description}`
-                );
-              }
-              break;
-
             case 'provider-status':
-              // Update provider status
-              break;
-
             case 'pong':
-              // Heartbeat response
+            case 'task-progress':
+              // Informational — no client state change required
               break;
           }
         } catch (err) {
@@ -117,7 +138,7 @@ export function useWebSocket() {
       };
     } catch (err) {
       console.error('[BLAXIN] Connection failed:', err);
-      reconnectTimerRef.current = setTimeout(connect, 3000);
+      reconnectTimerRef.current = setTimeout(connect, RECONNECT_DELAY_MS);
     }
   }, []);
 
@@ -125,32 +146,49 @@ export function useWebSocket() {
     connect();
     return () => {
       clearTimeout(reconnectTimerRef.current);
+      if (heartbeatRef.current) clearInterval(heartbeatRef.current);
       wsRef.current?.close();
     };
   }, [connect]);
 
-  const sendMessage = useCallback((content: string) => {
+  const send = useCallback((payload: unknown) => {
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({
-        type: 'user-message',
-        data: { content },
-      }));
+      wsRef.current.send(JSON.stringify(payload));
     }
   }, []);
+
+  const sendMessage = useCallback((content: string) => {
+    send({ type: 'user-message', data: { content } });
+  }, [send]);
 
   const stopAgent = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'stop' }));
-    }
-  }, []);
+    send({ type: 'stop' });
+  }, [send]);
 
   const clearHistory = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'clear' }));
-    }
+    send({ type: 'clear' });
     useAppStore.getState().clearMessages();
     useAppStore.getState().clearToolExecutions();
-  }, []);
+  }, [send]);
 
-  return { sendMessage, stopAgent, clearHistory };
+  const respondToConfirmation = useCallback((approved: boolean) => {
+    const conf = useAppStore.getState().pendingConfirmation;
+    if (!conf) return;
+    send({
+      type: 'confirmation-response',
+      data: {
+        taskId: conf.taskId,
+        stepId: conf.stepId,
+        approved,
+      },
+    });
+    useAppStore.getState().setPendingConfirmation(null);
+  }, [send]);
+
+  return {
+    sendMessage,
+    stopAgent,
+    clearHistory,
+    respondToConfirmation,
+  };
 }
