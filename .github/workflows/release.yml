@@ -309,10 +309,11 @@ jobs:
             exit 1
           fi
 
-          # Use Python to generate valid JSON (minisign sigs have newlines that
-          # break bash heredocs when embedded as string values)
+          # Use Python to generate valid JSON. Tauri v2 AppImage updater
+          # signatures are a single line of base64 (not multi-line minisign),
+          # so embedding them as JSON string values needs no newline handling.
           python3 -c "
-          import json, datetime, sys
+          import json, datetime, sys, base64
 
           sig_content = open('$SIG_FILE').read().strip()
           if not sig_content:
@@ -320,9 +321,14 @@ jobs:
               sys.exit(1)
 
           lines = sig_content.split('\n')
-          print(f'Signature: {len(sig_content)} chars, {len(lines)} lines')
-          if len(lines) < 2:
-              print('ERROR: Signature does not have minisign format')
+          print(f'Signature: {len(sig_content)} chars, {len(lines)} line(s)')
+          if len(sig_content) < 50:
+              print('ERROR: Signature is too short to be valid')
+              sys.exit(1)
+          try:
+              base64.b64decode(sig_content, validate=True)
+          except Exception:
+              print('ERROR: Signature is not valid base64')
               sys.exit(1)
 
           manifest = {
@@ -418,13 +424,14 @@ jobs:
           fi
           echo "✓ AppImage signature: ${SIG_SIZE} bytes"
 
-          # Check signature has minisign format (at least 2 lines)
-          SIG_LINES=$(wc -l < "artifacts/BLAXIN_${VERSION}_amd64.AppImage.sig")
-          if [ "$SIG_LINES" -lt 2 ]; then
-            echo "ERROR: Signature does not have minisign format (only $SIG_LINES lines)"
+          # Check signature is valid single-line base64 (Tauri v2 AppImage
+          # updater signature format - not multi-line minisign)
+          SIG_CHARS=$(wc -c < "artifacts/BLAXIN_${VERSION}_amd64.AppImage.sig")
+          if ! base64 -d "artifacts/BLAXIN_${VERSION}_amd64.AppImage.sig" > /dev/null 2>&1; then
+            echo "ERROR: AppImage signature is not valid base64"
             exit 1
           fi
-          echo "✓ AppImage signature format: ${SIG_LINES} lines (valid minisign)"
+          echo "✓ AppImage signature format: ${SIG_CHARS} chars (valid single-line base64)"
 
           # Check .deb exists
           if [ ! -f "artifacts/blaxin_${VERSION}_amd64.deb" ]; then
