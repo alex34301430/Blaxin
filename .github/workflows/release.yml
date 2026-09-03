@@ -53,8 +53,7 @@ jobs:
             libgtk-3-dev \
             libsoup-3.0-dev \
             libjavascriptcoregtk-4.1-dev \
-            imagemagick \
-            minisign
+            imagemagick
 
       - name: Install Tauri CLI
         run: cargo install tauri-cli
@@ -302,11 +301,17 @@ jobs:
             fi
           done
 
-      - name: Sign .deb package (same minisign key as the AppImage)
+      - name: Sign .deb package (Tauri signer, same key as the AppImage)
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
+          # The deb updater verifies with the SAME key that signs the
+          # AppImage, so we sign with the installed `cargo tauri signer`
+          # (the minisign CLI is not packaged on ubuntu-22.04). The signer
+          # accepts the TAURI_SIGNING_PRIVATE_KEY base64 form directly and
+          # writes <file>.sig next to the deb (single-line base64, which
+          # is exactly the manifest format).
           VERSION="${{ steps.version.outputs.version_num }}"
           DEB="artifacts/blaxin_${VERSION}_amd64.deb"
           SIG="artifacts/blaxin_${VERSION}_amd64.deb.sig"
@@ -322,33 +327,42 @@ jobs:
           KEY_FILE="$(mktemp)"
           trap 'rm -f "$KEY_FILE"' EXIT
 
-          # The secret is either the raw minisign secret-key text or base64 of it
-          if printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | head -1 | grep -q "untrusted comment"; then
-            printf '%s\n' "$TAURI_SIGNING_PRIVATE_KEY" > "$KEY_FILE"
-          else
-            printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | base64 -d > "$KEY_FILE" 2>/dev/null
-          fi
-          if [ ! -s "$KEY_FILE" ]; then
-            echo "ERROR: could not decode the signing key"
-            exit 1
-          fi
-
-          sign_deb() {
+          signed_ok=0
+          try_sign() {
+            # $1 = key material to write (no trailing newline — the signer
+            # base64-decodes the file verbatim)
+            printf '%s' "$1" > "$KEY_FILE"
             if [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
-              minisign -S -s "$KEY_FILE" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" -m "$DEB" -x "$SIG"
+              cargo tauri signer sign -f "$KEY_FILE" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$DEB" >/dev/null 2>&1
             else
-              minisign -S -s "$KEY_FILE" -m "$DEB" -x "$SIG"
+              cargo tauri signer sign -f "$KEY_FILE" "$DEB" >/dev/null 2>&1
             fi
           }
 
-          if ! sign_deb; then
-            echo "WARN: direct signing failed — retrying without password (key may be unencrypted)"
-            minisign -S -s "$KEY_FILE" -m "$DEB" -x "$SIG" || {
-              echo "ERROR: could not sign the deb package"
-              exit 1
-            }
+          # Attempt 1: the secret as-is (the base64 form Tauri's own
+          # updater signing uses — this is what CI produced AppImage.sig
+          # with, so it must succeed).
+          if try_sign "$TAURI_SIGNING_PRIVATE_KEY"; then
+            signed_ok=1
           fi
 
+          # Attempt 2: fall back to the base64-decoded (raw text) form.
+          if [ "$signed_ok" -ne 1 ]; then
+            DECODED=$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | base64 -d 2>/dev/null || true)
+            if [ -n "$DECODED" ] && try_sign "$DECODED"; then
+              signed_ok=1
+            fi
+          fi
+
+          if [ "$signed_ok" -ne 1 ]; then
+            echo "ERROR: could not sign the deb package with the Tauri signer"
+            exit 1
+          fi
+
+          if [ ! -s "$SIG" ]; then
+            echo "ERROR: signing did not produce $SIG"
+            exit 1
+          fi
           echo "✓ Signed .deb package"
           ls -la "$SIG"
 
