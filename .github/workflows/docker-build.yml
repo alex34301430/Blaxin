@@ -153,10 +153,9 @@ jobs:
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: |
-            trivy-server.sarif
-            trivy-client.sarif
-            trivy-nginx.sarif
+          # upload-sarif accepts a single file OR a directory (scanned
+          # recursively for *.sarif) — it does not accept a file list.
+          sarif_file: .
           category: docker-vulnerabilities
 
       # ── Upload scan artifacts ──────────────────────────────────
