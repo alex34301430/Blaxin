@@ -69,7 +69,7 @@ jobs:
       - name: Build server image
         uses: docker/build-push-action@v6
         with:
-          context: ./server
+          context: ./blaxin/server
           load: true
           tags: blaxin-server:scan
           cache-from: type=gha,scope=server
@@ -78,7 +78,7 @@ jobs:
       - name: Build client image
         uses: docker/build-push-action@v6
         with:
-          context: ./client
+          context: ./blaxin/client
           load: true
           tags: blaxin-client:scan
           cache-from: type=gha,scope=client
@@ -87,7 +87,7 @@ jobs:
       - name: Build nginx image
         uses: docker/build-push-action@v6
         with:
-          context: ./nginx
+          context: ./blaxin/nginx
           load: true
           tags: blaxin-nginx:scan
           cache-from: type=gha,scope=nginx
@@ -173,7 +173,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:
-          context: ./server
+          context: ./blaxin/server
           push: true
           tags: ${{ steps.meta-server.outputs.tags }}
           labels: ${{ steps.meta-server.outputs.labels }}
@@ -184,7 +184,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:
-          context: ./client
+          context: ./blaxin/client
           push: true
           tags: ${{ steps.meta-client.outputs.tags }}
           labels: ${{ steps.meta-client.outputs.labels }}
@@ -195,7 +195,7 @@ jobs:
         if: github.event_name != 'pull_request'
         uses: docker/build-push-action@v6
         with:
-          context: ./nginx
+          context: ./blaxin/nginx
           push: true
           tags: ${{ steps.meta-nginx.outputs.tags }}
           labels: ${{ steps.meta-nginx.outputs.labels }}
