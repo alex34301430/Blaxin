@@ -327,34 +327,37 @@ jobs:
           KEY_FILE="$(mktemp)"
           trap 'rm -f "$KEY_FILE"' EXIT
 
-          signed_ok=0
-          try_sign() {
-            # $1 = key material to write (no trailing newline — the signer
-            # base64-decodes the file verbatim)
+          run_signer() {
+            # $1 = key material to write. The signer base64-decodes the
+            # file verbatim, so strip any accidental newlines first.
             printf '%s' "$1" > "$KEY_FILE"
             if [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
-              cargo tauri signer sign -f "$KEY_FILE" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$DEB" >/dev/null 2>&1
+              cargo tauri signer sign -f "$KEY_FILE" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$DEB" 2>&1
             else
-              cargo tauri signer sign -f "$KEY_FILE" "$DEB" >/dev/null 2>&1
+              cargo tauri signer sign -f "$KEY_FILE" "$DEB" 2>&1
             fi
           }
 
-          # Attempt 1: the secret as-is (the base64 form Tauri's own
-          # updater signing uses — this is what CI produced AppImage.sig
-          # with, so it must succeed).
-          if try_sign "$TAURI_SIGNING_PRIVATE_KEY"; then
+          signed_ok=0
+          OUTPUT=""
+          # Attempt 1: the secret verbatim (trimmed). This is the form
+          # Tauri's own updater signing consumes.
+          RAW="$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | tr -d '\r\n')"
+          if OUTPUT="$(run_signer "$RAW")"; then
             signed_ok=1
           fi
 
-          # Attempt 2: fall back to the base64-decoded (raw text) form.
+          # Attempt 2: the base64-decoded (raw key text) form.
           if [ "$signed_ok" -ne 1 ]; then
-            DECODED=$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | base64 -d 2>/dev/null || true)
-            if [ -n "$DECODED" ] && try_sign "$DECODED"; then
+            DECODED="$(printf '%s' "$RAW" | base64 -d 2>/dev/null || true)"
+            if [ -n "$DECODED" ] && OUTPUT="$(run_signer "$DECODED")"; then
               signed_ok=1
             fi
           fi
 
           if [ "$signed_ok" -ne 1 ]; then
+            echo "Signer output:"
+            echo "$OUTPUT"
             echo "ERROR: could not sign the deb package with the Tauri signer"
             exit 1
           fi
