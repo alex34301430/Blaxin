@@ -7,6 +7,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { StatusBar } from './components/StatusBar';
 import { ConfirmationModal } from './components/ConfirmationModal';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
+import { MetricsPage } from './pages/MetricsPage';
 import { SetupWizard } from './components/SetupWizard';
 import { UpdateNotifier } from './components/UpdateNotifier';
 import { useAppStore } from './utils/store';
@@ -80,6 +81,10 @@ export default function App() {
 
         {currentPage === 'terminal' && (
           <TerminalPanel />
+        )}
+
+        {currentPage === 'metrics' && (
+          <MetricsPage />
         )}
 
         {currentPage === 'diagnostics' && (

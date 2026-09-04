@@ -167,6 +167,10 @@ export interface AppConfig {
     maxRetries: number;
     requireConfirmation: boolean;
     confirmationPatterns: string[];
+    /** Run unambiguous safe tool requests through the deterministic fast path (no LLM round trip). */
+    enableFastPath: boolean;
+    /** Execute independent tool calls from one model response concurrently. */
+    enableParallelTools: boolean;
   };
   tools: Record<string, boolean>;
   appearance: {
@@ -182,4 +186,11 @@ export interface Tool {
   definition: ToolDefinition;
   execute(args: Record<string, unknown>): Promise<ToolResult>;
   requiresConfirmation?(args: Record<string, unknown>): boolean;
+  /**
+   * Whether the tool may run concurrently with other tools from the same
+   * model response. Tools that touch a shared mutable resource (the X
+   * display, the clipboard, the browser) must stay 'serial'. Defaults to
+   * 'serial' so parallel safety is always an explicit opt-in.
+   */
+  executionMode?: 'parallel' | 'serial';
 }

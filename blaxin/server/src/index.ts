@@ -12,6 +12,7 @@ import { credentialStore } from './utils/credentials.js';
 import { runDiagnostics } from './utils/diagnostics.js';
 import { sessionState } from './utils/session-state.js';
 import { memoryStore } from './utils/memory.js';
+import { telemetry, parseMetricsLimit } from './utils/telemetry.js';
 import {
   corsOriginValidator,
   getAllowedOriginsFromEnv,
@@ -108,6 +109,16 @@ app.get('/api/update/check', async (_req, res) => {
     logger.error('update', 'Failed to check for updates', error);
     res.json({ updateAvailable: false, error: error.message });
   }
+});
+
+// Performance metrics (persisted ring of completed tasks). The task
+// list is bounded (?n= is clamped) and user prompts are never exposed.
+app.get('/api/metrics', (req, res) => {
+  const n = parseMetricsLimit(req.query.n);
+  res.json({
+    summary: telemetry.summary(n),
+    tasks: telemetry.latest(n).map((t) => ({ ...t, message: undefined })),
+  });
 });
 
 // Diagnostics
@@ -436,6 +447,9 @@ server.listen(PORT, HOST, async () => {
 const shutdown = () => {
   logger.info('server', 'Shutting down...');
   sessionState.stopAutoSave();
+  // Persist any unflushed telemetry (best-effort sync flush — this is the
+  // shutdown path, not the agent hot path).
+  telemetry.flushSync();
   // Kill any live terminal shells (and their children) so no processes
   // survive the backend exit.
   terminateAllSessions();

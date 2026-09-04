@@ -69,6 +69,11 @@ function isProtectedPath(filePath: string): boolean {
 export class FileSystemTool implements Tool {
   name = 'filesystem';
   description = 'Read, write, create, and manage files and directories on the system.';
+  // Read-only filesystem operations are independent syscalls and can run
+  // alongside other tools. Mutating operations (write/delete/rename) are
+  // kept serial by the orchestrator's wave planner so same-path races are
+  // impossible.
+  executionMode = 'parallel' as const;
 
   definition = {
     type: 'function' as const,

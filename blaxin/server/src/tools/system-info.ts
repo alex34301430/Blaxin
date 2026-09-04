@@ -8,6 +8,8 @@ const execAsync = promisify(exec);
 export class SystemInfoTool implements Tool {
   name = 'system-info';
   description = 'Get system information including OS details, memory, CPU, disk space, running processes, and network status.';
+  // Read-only queries; safe to run concurrently with other tools.
+  executionMode = 'parallel' as const;
 
   definition = {
     type: 'function' as const,

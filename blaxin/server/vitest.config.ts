@@ -6,8 +6,9 @@ export default defineConfig({
     exclude: ['dist/**', 'node_modules/**'],
     environment: 'node',
     env: {
-      // Keep tests from touching real runtime memory
+      // Keep tests from touching real runtime state
       BLAXIN_MEMORY_FILE: '.blaxin-state/memory.test.json',
+      BLAXIN_TELEMETRY_FILE: '.blaxin-state/telemetry.test.json',
     },
   },
 });

@@ -3,6 +3,8 @@ import { Tool, ToolResult } from '../types.js';
 export class SearchTool implements Tool {
   name = 'search';
   description = 'Search the web for information. Returns search results with titles, URLs, and snippets.';
+  // Independent network reads; safe to run concurrently with other tools.
+  executionMode = 'parallel' as const;
 
   definition = {
     type: 'function' as const,

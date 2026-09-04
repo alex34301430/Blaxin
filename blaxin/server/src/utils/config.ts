@@ -2,7 +2,17 @@ import { AppConfig } from '../types.js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { dataPath } from './paths.js';
 
-const CONFIG_FILE = dataPath('blaxin-config.json');
+const CONFIG_FILE = process.env.BLAXIN_CONFIG_FILE
+  ? dataPath(process.env.BLAXIN_CONFIG_FILE)
+  : dataPath('blaxin-config.json');
+
+// getConfig() is called from the agent hot path (every tool call, every
+// loop iteration). Parsing the config file from disk on each call was pure
+// synchronous I/O on the critical path, so the parsed result is cached and
+// only re-read after a short TTL or when saveConfig() invalidates it.
+const CONFIG_CACHE_TTL_MS = 1000;
+let cachedConfig: AppConfig | null = null;
+let cachedAt = 0;
 
 const defaultConfig: AppConfig = {
   server: {
@@ -13,6 +23,8 @@ const defaultConfig: AppConfig = {
     maxSteps: 20,
     maxRetries: 3,
     requireConfirmation: true,
+    enableFastPath: true,
+    enableParallelTools: true,
     confirmationPatterns: [
       'delete',
       'remove',
@@ -72,10 +84,29 @@ export function saveConfig(config: AppConfig): void {
   } catch (e) {
     // Config save failed silently
   }
+  // Invalidate immediately so the next getConfig() sees the new values
+  // (agent confirmation/step settings must never run stale).
+  invalidateConfigCache();
 }
 
+/**
+ * Cached accessor for the hot path. Falls back to a fresh disk read when
+ * the cache is stale or was invalidated by saveConfig().
+ */
 export function getConfig(): AppConfig {
-  return loadConfig();
+  const now = Date.now();
+  if (cachedConfig && now - cachedAt < CONFIG_CACHE_TTL_MS) {
+    return cachedConfig;
+  }
+  cachedConfig = loadConfig();
+  cachedAt = now;
+  return cachedConfig;
+}
+
+/** Invalidate the cache (call after saveConfig / external edits). */
+export function invalidateConfigCache(): void {
+  cachedConfig = null;
+  cachedAt = 0;
 }
 
 /**

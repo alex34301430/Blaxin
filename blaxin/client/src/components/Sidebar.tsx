@@ -1,14 +1,15 @@
 import React from 'react';
 import { useAppStore } from '../utils/store';
-import { 
-  FiMessageSquare, FiSettings, FiCpu, FiPower, 
+import {
+  FiMessageSquare, FiSettings, FiCpu, FiPower,
   FiTerminal, FiMonitor, FiShield, FiInfo,
-  FiZap, FiActivity, FiHeart
+  FiZap, FiActivity, FiHeart, FiBarChart2,
 } from 'react-icons/fi';
 
 const navItems = [
   { id: 'chat', icon: FiMessageSquare, label: 'Chat' },
   { id: 'terminal', icon: FiTerminal, label: 'Terminal' },
+  { id: 'metrics', icon: FiBarChart2, label: 'Metrics' },
   { id: 'diagnostics', icon: FiHeart, label: 'Diagnostics' },
 ];
 

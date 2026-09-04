@@ -76,6 +76,15 @@ class ToolRegistry {
     return tool.requiresConfirmation(args);
   }
 
+  /**
+   * Whether a tool may run concurrently with other tools from the same
+   * response. Conservative default: 'serial' (see Tool.executionMode).
+   */
+  getExecutionMode(name: string): 'parallel' | 'serial' {
+    const tool = this.tools.get(name);
+    return tool?.executionMode === 'parallel' ? 'parallel' : 'serial';
+  }
+
   setEnabled(name: string, enabled: boolean): void {
     if (enabled) {
       this.enabledTools.add(name);

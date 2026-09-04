@@ -10,6 +10,54 @@ import { getApiBase } from './endpoints';
 // - Never echo secrets. Server responses already avoid keys, but the
 //   error message shown to the user must stay useful even on failure.
 
+export interface MetricsToolTiming {
+  name: string;
+  ms: number;
+  attempts: number;
+  state: string;
+}
+
+export interface MetricsTask {
+  taskId: string;
+  kind: 'direct' | 'llm';
+  startedAt: number;
+  queueWaitMs: number;
+  totalMs: number;
+  modelCalls: number;
+  modelMs: number;
+  toolCalls: number;
+  waves: number;
+  parallelWaves: number;
+  tools: MetricsToolTiming[];
+  result: string;
+}
+
+export interface MetricsSummary {
+  samples: number;
+  totalMs: { median: number; p95: number; min: number; max: number };
+  queueWaitMs: { median: number; p95: number };
+  modelMs: { median: number; p95: number };
+  toolMs: { median: number; p95: number };
+  modelCalls: number;
+  toolCalls: number;
+  totalModelMs: number;
+  totalToolMs: number;
+  waves: number;
+  parallelWaves: number;
+  direct: number;
+  llm: number;
+  errors: number;
+  byKind: {
+    direct: { count: number; medianMs: number; p95Ms: number };
+    llm: { count: number; medianMs: number; p95Ms: number };
+  };
+}
+
+export interface MetricsResponse {
+  summary: MetricsSummary;
+  tasks: MetricsTask[];
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
@@ -113,6 +161,10 @@ export const api = {
 
   // Diagnostics
   diagnostics: () => fetchAPI<any>('/diagnostics'),
+
+  // Performance metrics
+  metrics: (n?: number) =>
+    fetchAPI<MetricsResponse>(`/metrics?n=${n ?? 50}`),
 
   // Providers
   getProviders: () => fetchAPI<Array<{ id: string; name: string; hasKey: boolean; maskedKey?: string }>>('/providers'),
