@@ -25,6 +25,7 @@ import { createMessage, parseFrame } from './protocol.js';
 import { DeviceIdentity } from './identity.js';
 import { CLOSE } from './handshake.js';
 import { CapabilitySet } from './types.js';
+import { validateBrainUrl } from './transport-policy.js';
 
 export interface BodyLinkOptions {
   url: string;
@@ -40,6 +41,14 @@ export interface BodyLinkOptions {
   onMessage?: (msg: WireMessage) => void;
   /** Fired when the transport closed for any reason. */
   onClosed?: (info: { code: number; reason: string; manual: boolean }) => void;
+  /** PEM bundle of CA(s) that signed the Brain's TLS certificate. When
+   * set, wss connections are validated against these roots (otherwise the
+   * system roots are used). Never disable validation implicitly. */
+  ca?: string;
+  /** EXPLICIT development override: allows plaintext ws:// to non-loopback
+   * addresses and skips TLS certificate verification. Never enabled by
+   * default; every use is surfaced in state + logs. */
+  allowInsecure?: boolean;
   now?: () => number;
 }
 
@@ -54,6 +63,19 @@ function toBuffer(data: Buffer | ArrayBuffer | Buffer[]): Buffer {
   if (Buffer.isBuffer(data)) return data;
   if (Array.isArray(data)) return Buffer.concat(data);
   return Buffer.from(data);
+}
+
+/** Heuristic: is a pre-open socket error a TLS certificate failure? A
+ * certificate problem is configuration, not a transient network blip, so
+ * the link must fail closed instead of reconnecting forever. */
+export function looksLikeTlsFailure(message: string): boolean {
+  const m = message.toLowerCase();
+  const tokens = [
+    'certificate', 'self-signed', 'unable to verify', 'issuer',
+    'hostname', 'wrong hostname', 'cert has expired', 'not yet valid',
+    'unknown ca', 'cert_', 'leaf signature', 'tls',
+  ];
+  return tokens.some((t) => m.includes(t));
 }
 /** Consecutive auth rejections before auto-reconnect gives up. */
 const MAX_AUTH_RETRIES = 3;
@@ -75,6 +97,9 @@ export class BodyLink {
   private readonly now: () => number;
   private readonly capabilities: CapabilitySet;
   private readonly name: string;
+  private readonly ca: string | undefined;
+  private readonly allowInsecure: boolean;
+  private everOpened = false;
 
   constructor(private readonly options: BodyLinkOptions) {
     this.url = options.url;
@@ -82,6 +107,8 @@ export class BodyLink {
     this.capabilities = options.capabilities;
     this.name = options.name ?? 'Blaxin Body';
     this.autoReconnect = options.autoReconnect ?? true;
+    this.ca = options.ca;
+    this.allowInsecure = options.allowInsecure === true;
     this.now = options.now ?? Date.now;
     this.lastActivity = this.now();
   }
@@ -178,9 +205,28 @@ export class BodyLink {
     if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
     this.setState(this.reconnectAttempt > 0 ? 'RECONNECTING' : 'CONNECTING');
 
+    // Transport policy gate: a non-loopback Brain must be reached over
+    // wss (unless the operator explicitly opted into insecure dev mode).
+    // Refusing here — before any bytes are sent — is what stops the
+    // documented plaintext MITM attack surface.
+    const verdict = validateBrainUrl(this.url, { allowInsecure: this.allowInsecure });
+    if (!verdict.ok) {
+      this.manualClose = true; // policy violation: never auto-retry a forbidden URL
+      this.clearReconnectTimer();
+      this.setState('ERROR', { reason: verdict.error });
+      logger.warn('link', `Brain connection refused by transport policy: ${verdict.code}`);
+      return;
+    }
+    if (this.allowInsecure) {
+      logger.warn('link', 'Transport security override active (BLAXIN_BRAIN_ALLOW_INSECURE) — plaintext/insecure connections permitted for development');
+    }
+
     let ws: WebSocket;
     try {
-      ws = new WebSocket(this.url, { perMessageDeflate: false, maxPayload: MAX_FRAME_BYTES });
+      const wsOptions: Record<string, unknown> = { perMessageDeflate: false, maxPayload: MAX_FRAME_BYTES };
+      if (this.ca) wsOptions.ca = this.ca;
+      if (this.allowInsecure) wsOptions.rejectUnauthorized = false;
+      ws = new WebSocket(this.url, wsOptions);
     } catch (error: any) {
       logger.error('link', `Failed to construct WebSocket to ${this.url}: ${error.message}`);
       this.scheduleReconnect('socket construction failed');
@@ -189,8 +235,10 @@ export class BodyLink {
     this.ws = ws;
     this.framesPreReady = 0;
     this.lastActivity = this.now();
+    this.everOpened = false;
 
     ws.on('open', () => {
+      this.everOpened = true;
       this.connectedAt = this.now();
       this.lastActivity = this.now();
       this.setState('AUTHENTICATING');
@@ -233,7 +281,17 @@ export class BodyLink {
 
     ws.on('error', (error) => {
       logger.warn('link', `Socket error: ${error.message}`);
-      // 'close' follows and drives the reconnect logic.
+      // A TLS certificate failure is a CONFIGURATION problem, not a
+      // transient network blip: hammering the Brain with reconnects would
+      // hide the real cause. Fail closed with guidance instead.
+      if (!this.everOpened && looksLikeTlsFailure(error.message || String(error))) {
+        this.manualClose = true;
+        this.clearReconnectTimer();
+        this.setState('ERROR', {
+          reason: `TLS certificate verification failed: ${error.message}. Check the Brain certificate, or provide its CA with BLAXIN_BRAIN_CA_FILE (development escape hatch: BLAXIN_BRAIN_ALLOW_INSECURE=1).`,
+        });
+      }
+      // Otherwise 'close' follows and drives the reconnect logic.
     });
   }
 

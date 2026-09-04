@@ -258,32 +258,77 @@ path when configured.
 
 ## Transport & security
 
-- The transport is an abstraction (currently secure WebSocket / WSS).
-  The Brain serves `/ws/brain` with the same origin validation as the
-  main control plane (no-Origin non-browser clients allowed, browser
-  origins allowlisted). Remote deployments must use WSS; plaintext is
-  for localhost/LAN development only and is never a silent downgrade.
-- WebSocket servers keep `perMessageDeflate` disabled and payload caps
-  enforced.
+- The transport is an abstraction (currently WebSocket / WSS). The Brain
+  serves `/ws/brain` with the same origin validation as the main control
+  plane (no-Origin non-browser clients allowed, browser origins
+  allowlisted). WebSocket servers keep `perMessageDeflate` disabled and
+  payload caps enforced.
+- **WSS (TLS) on the Brain**: give the Brain a PEM key + certificate and
+  it serves WSS *only* — a TLS-configured port never speaks plaintext,
+  so a downgrade attempt dies at the TLS handshake:
+
+  ```bash
+  # generate a key + certificate (here self-signed for a LAN/private
+  # deployment; include every DNS/IP name Bodies will use, e.g.
+  # DNS:brain.local,IP:192.168.0.106):
+  openssl req -x509 -newkey rsa:2048 -sha256 -nodes \
+    -keyout brain.key -out brain.crt -days 365 \
+    -subj "/CN=brain.local" \
+    -addext "subjectAltName=DNS:brain.local,DNS:localhost,IP:127.0.0.1,IP:192.168.0.106" \
+    -addext "extendedKeyUsage=serverAuth"
+
+  BLAXIN_BRAIN_TLS_KEY=brain.key BLAXIN_BRAIN_TLS_CERT=brain.crt npm run brain
+  ```
+
+- **Plaintext policy on the Body (the MITM fix)**: the Body *refuses*
+  `ws://` to any non-loopback Brain address before a single byte is
+  sent. A remote Brain must be reached over `wss://`. The explicit
+  development override `BLAXIN_BRAIN_ALLOW_INSECURE=1` re-enables
+  plaintext and skips certificate checks — it is logged on every use and
+  never enabled by default.
+- **Certificate validation is mandatory**: the Body always verifies the
+  Brain's TLS certificate. A certificate signed by a private CA is
+  provided to the Body with `BLAXIN_BRAIN_CA_FILE` (PEM bundle); with a
+  publicly-trusted certificate nothing extra is needed. A certificate
+  the Body does not trust fails CLOSED with actionable state (`ERROR`)
+  — never a silent downgrade, never an endless reconnect loop.
 - Brain HTTP surface: `GET /health`, `/version`, `/protocol`,
   `/capabilities`, `/pairing`, `POST /pairing/start`, `/pairing/cancel`,
   `GET /devices`, `POST /devices/:id/revoke`, `DELETE /devices/:id`,
   `GET /ai/status`, `POST /ai/select` (present when an AI control-plane
-  handle is attached). Admin endpoints default to loopback-only.
+  handle is attached). Admin endpoints default to loopback-only; they
+  are served over the same TLS channel when WSS is enabled.
 - Provider/API keys live on the Brain device only and never enter the
   protocol. GitHub credentials are never part of pairing, the protocol,
   telemetry or logs.
 
-### Threat-model limits (documented, not hidden)
+### Transport env vars
+
+| Variable | Purpose |
+|----------|---------|
+| `BLAXIN_BRAIN_TLS_KEY` / `BLAXIN_BRAIN_TLS_CERT` | Brain PEM file paths — when both are set the Brain serves WSS only |
+| `BLAXIN_BRAIN_CA_FILE` | Body: PEM CA bundle that signed the Brain's certificate (private CAs / self-signed LAN) |
+| `BLAXIN_BRAIN_ALLOW_INSECURE` | Body: `1` = explicit dev override permitting plaintext ws:// off-loopback and skipping cert checks |
+
+### Threat model (what this closes)
 
 - Message *authentication* is per-connection Ed25519 challenge/response
   (fresh nonces, both directions). Message *confidentiality/integrity*
-  on the wire comes from WSS; on plaintext LAN a passive/active network
-  attacker who can hijack the TCP stream during the initial unpaired
-  pairing exchange could substitute their own key (classic TOFU
-  bootstrap problem — SSH solves the same problem with out-of-band host
-  key verification). Use WSS for anything remote and treat the pairing
-  exchange over untrusted networks accordingly.
+  on the wire comes from TLS.
+- **Plaintext MITM is closed**: the previously documented TOFU exposure
+  (an attacker hijacking an unpaired `ws://` LAN connection could
+  substitute their own key) is addressed two ways: the Body refuses
+  plaintext to any non-loopback Brain, and over WSS the Brain's
+  certificate is always verified — an impostor cannot present the
+  Brain's key material or a certificate for its name. The remaining
+  trust anchor for a *private* CA is installing that CA on the Body
+  (`BLAXIN_BRAIN_CA_FILE`), the same trust model as any private PKI;
+  with a publicly-trusted certificate no extra trust is needed.
+- The full pairing UX over WSS (code generation over https, pairing,
+  identity auth, reconnect, revocation) plus the certificate-rejection
+  path is exercised by `wss-transport.test.ts` (in-process, real TLS)
+  and `wss-e2e.test.ts` (two real processes over the machine's LAN
+  address).
 
 ## Running the tests
 
@@ -291,7 +336,8 @@ path when configured.
 cd server
 npm test                       # full suite (embedded + distributed)
 npx vitest run src/__tests__/distributed            # distributed layer
-npx vitest run src/__tests__/distributed/two-process-e2e.test.ts   # 2 real processes
+npx vitest run src/__tests__/distributed/two-process-e2e.test.ts   # 2 real processes, ws
+npx vitest run src/__tests__/distributed/wss-e2e.test.ts           # 2 real processes, WSS+TLS
 npx vitest run src/__tests__/distributed/llm-driver.test.ts         # LLM driver unit tests
 npm run bench                  # performance guard rails
 ```

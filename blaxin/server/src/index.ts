@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { WebSocketServer, WebSocket } from 'ws';
 import { createServer } from 'http';
+import { readFileSync } from 'fs';
 import { providers } from './providers/index.js';
 import { toolRegistry } from './tools/index.js';
 import { orchestrator } from './orchestrator/index.js';
@@ -25,6 +26,7 @@ import { APP_VERSION, GITHUB_REPO, GITHUB_RELEASES_URL } from './utils/version.j
 import { dataPath } from './utils/paths.js';
 import { loadOrCreateIdentity } from './distributed/identity.js';
 import { RemoteBrainDriver } from './distributed/remote-brain.js';
+import { validateBrainUrl } from './distributed/transport-policy.js';
 import { ProviderId, AppConfig } from './types.js';
 
 // ── External Brain mode ─────────────────────────────────────────
@@ -42,6 +44,26 @@ const BRAIN_URL = process.env.BLAXIN_BRAIN_URL || '';
 
 let remoteBrain: RemoteBrainDriver | null = null;
 
+/** PEM bundle of the CA that signed the Brain's TLS certificate
+ * (BLAXIN_BRAIN_CA_FILE). Remote WSS Brains with a private/self-signed
+ * certificate are verified against this — certificates are never skipped. */
+function brainCaPem(): string | undefined {
+  const file = process.env.BLAXIN_BRAIN_CA_FILE;
+  if (!file || !file.trim()) return undefined;
+  try {
+    return readFileSync(file.trim(), 'utf8');
+  } catch (error: any) {
+    logger.warn('security', `Cannot read BLAXIN_BRAIN_CA_FILE "${file}": ${error.message}`);
+    return undefined;
+  }
+}
+
+/** Explicit development override: allow plaintext ws:// to non-loopback
+ * Brains and skip TLS verification (BLAXIN_BRAIN_ALLOW_INSECURE=1). */
+function brainAllowInsecure(): boolean {
+  return process.env.BLAXIN_BRAIN_ALLOW_INSECURE === '1';
+}
+
 /** Lazily build the external-Brain driver (body identity + link). */
 function getRemoteBrain(): RemoteBrainDriver | null {
   if (BRAIN_MODE !== 'external') return null;
@@ -54,6 +76,8 @@ function getRemoteBrain(): RemoteBrainDriver | null {
     remoteBrain = new RemoteBrainDriver({
       identity,
       url: BRAIN_URL || 'ws://127.0.0.1:3100/ws/brain',
+      ca: brainCaPem(),
+      allowInsecure: brainAllowInsecure(),
       onEvent: broadcast,
     });
     // Auto-connect at boot only when a Brain URL was configured (the
@@ -82,6 +106,8 @@ function reconnectRemoteBrain(url: string, code?: string): void {
   remoteBrain = new RemoteBrainDriver({
     identity,
     url,
+    ca: brainCaPem(),
+    allowInsecure: brainAllowInsecure(),
     onEvent: broadcast,
   });
   remoteBrain.connect(code);
@@ -355,8 +381,12 @@ app.post('/api/brain/connect', (req, res) => {
   const { url, code } = req.body || {};
   if (typeof url === 'string' && url.trim()) {
     const parsedUrl = url.trim().replace(/\/+$/, '');
-    if (!/^wss?:\/\//.test(parsedUrl)) {
-      return res.status(400).json({ error: 'Brain URL must start with ws:// or wss://', code: 'BAD_URL' });
+    // Transport policy: non-loopback Brains must be reached over wss
+    // (unless BLAXIN_BRAIN_ALLOW_INSECURE=1 is set for development). This
+    // rejects plaintext-to-remote up front with actionable guidance.
+    const verdict = validateBrainUrl(parsedUrl, { allowInsecure: brainAllowInsecure() });
+    if (!verdict.ok) {
+      return res.status(400).json({ error: verdict.error, code: verdict.code });
     }
     // Point the driver at a new Brain (fresh RemoteBrainDriver).
     reconnectRemoteBrain(parsedUrl, typeof code === 'string' ? code : undefined);

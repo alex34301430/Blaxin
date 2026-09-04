@@ -46,6 +46,13 @@ export interface RemoteBrainOptions {
   getConfig?: () => ReturnType<typeof getConfig>;
   autoReconnect?: boolean;
   onEvent?: EventCallback;
+  /** PEM bundle of CA(s) that signed the Brain's TLS certificate (see
+   * BLAXIN_BRAIN_CA_FILE). Required for private-CA / self-signed remote
+   * Brains — certificates are always validated otherwise. */
+  ca?: string;
+  /** Explicit development override for plaintext/insecure connections.
+   * Never enabled by default (see BLAXIN_BRAIN_ALLOW_INSECURE). */
+  allowInsecure?: boolean;
   now?: () => number;
 }
 
@@ -99,6 +106,8 @@ export class RemoteBrainDriver {
       name: this.identity.name,
       capabilities: this.capabilities,
       autoReconnect: options.autoReconnect ?? true,
+      ca: options.ca,
+      allowInsecure: options.allowInsecure,
       onStateChange: (state, detail) => this.onLinkState(state, detail),
       onOpen: () => this.onLinkOpen(),
       onMessage: (msg) => this.onLinkMessage(msg),
@@ -156,6 +165,8 @@ export class RemoteBrainDriver {
         sessionId: this.sessionId,
         connectedAt: this.connectedAt,
         lastError: this.lastError,
+        transport: this.link.url.startsWith('wss://') ? 'wss' : 'ws',
+        secure: !this.link.url.startsWith('ws://') || this.isLoopbackUrl(),
       },
       capabilities: this.capabilities,
       task: this.task ? {
@@ -856,6 +867,15 @@ export class RemoteBrainDriver {
   private isRetryable(error: string): boolean {
     const retryable = ['timeout', 'ECONNREFUSED', 'ECONNRESET', 'ETIMEDOUT', 'network', 'temporary', 'EPIPE'];
     return retryable.some((r) => error.toLowerCase().includes(r));
+  }
+
+  private isLoopbackUrl(): boolean {
+    try {
+      const h = new URL(this.link.url).hostname.toLowerCase();
+      return h === 'localhost' || /^127\./.test(h) || h === '::1';
+    } catch {
+      return false;
+    }
   }
 
   private emit(event: string, data: any): void {

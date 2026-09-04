@@ -24,9 +24,14 @@
 //   GROQ_API_KEY / TOGETHER_API_KEY         provider keys — Brain only, never
 //                                           sent to Bodies (also loadable via the
 //                                           encrypted credential store)
+//   BLAXIN_BRAIN_TLS_KEY / BLAXIN_BRAIN_TLS_CERT
+//                                           PEM file paths. When both are set the
+//                                           Brain serves WSS only (TLS) — remote
+//                                           Bodies must connect with wss://.
 // =============================================================
 
 import { pathToFileURL } from 'url';
+import { readFileSync } from 'fs';
 import { BrainAIHandle, BrainRuntime } from './distributed/brain-runtime.js';
 import {
   BrainTaskDriver, DeterministicDriver, LLMTaskDriver,
@@ -118,6 +123,27 @@ const brainAI: BrainAIHandle = {
   },
 };
 
+/** TLS key/cert PEM contents for the Brain (BLAXIN_BRAIN_TLS_KEY /
+ * BLAXIN_BRAIN_TLS_CERT are PEM file paths). Returns undefined when not
+ * configured; fails loudly on partial or unreadable config so a broken
+ * TLS setup can never silently fall back to plaintext. */
+function readBrainTls(): { key: string; cert: string } | undefined {
+  const keyFile = (process.env.BLAXIN_BRAIN_TLS_KEY || '').trim();
+  const certFile = (process.env.BLAXIN_BRAIN_TLS_CERT || '').trim();
+  if (!keyFile && !certFile) return undefined;
+  if (!keyFile || !certFile) {
+    throw new Error('BLAXIN_BRAIN_TLS_KEY and BLAXIN_BRAIN_TLS_CERT must both be set (PEM file paths) to serve WSS');
+  }
+  const read = (label: string, file: string): string => {
+    try {
+      return readFileSync(file, 'utf8');
+    } catch (error: any) {
+      throw new Error(`Cannot read ${label} file "${file}": ${error.message}`);
+    }
+  };
+  return { key: read('TLS key', keyFile), cert: read('TLS certificate', certFile) };
+}
+
 export async function startBrainRuntime(options: {
   port?: number;
   host?: string;
@@ -125,6 +151,8 @@ export async function startBrainRuntime(options: {
   drivers?: BrainTaskDriver[];
   identityFile?: string;
   registryFile?: string;
+  /** PEM TLS key/cert (overrides BLAXIN_BRAIN_TLS_KEY/CERT env files). */
+  tls?: { key: string; cert: string };
 } = {}): Promise<BrainRuntime> {
   await initializeBrainAI();
 
@@ -154,6 +182,7 @@ export async function startBrainRuntime(options: {
   const runtime = new BrainRuntime({
     host: options.host,
     port: options.port,
+    tls: options.tls ?? readBrainTls(),
     drivers: new Map(drivers.map((d) => [d.id, d])),
     aiControl: brainAI,
     identityFile: options.identityFile ?? dataPath('brain-identity.json'),

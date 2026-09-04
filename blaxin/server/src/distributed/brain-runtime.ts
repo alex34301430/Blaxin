@@ -19,7 +19,8 @@
 
 import express from 'express';
 import cors from 'cors';
-import { createServer, Server as HttpServer } from 'http';
+import { createServer as createHttpServer, Server as HttpServer } from 'http';
+import { createServer as createHttpsServer } from 'https';
 import { WebSocketServer, WebSocket } from 'ws';
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../utils/logger.js';
@@ -44,6 +45,11 @@ import type { ToolDefinition, ToolCall } from '../types.js';
 export interface BrainRuntimeOptions {
   host?: string;
   port?: number;
+  /** PEM key + certificate pair. When provided the Brain serves WSS (TLS)
+   * only — plaintext is never offered on a TLS-configured port and the
+   * transport can never silently downgrade. Certificate files are read by
+   * the caller (brain-main loads BLAXIN_BRAIN_TLS_KEY/CERT). */
+  tls?: { key: string; cert: string };
   /** Server identity (defaults to a persisted brain identity in the data dir). */
   identity?: DeviceIdentity;
   registry?: DeviceRegistry;
@@ -136,6 +142,7 @@ export class BrainRuntime {
   readonly now: () => number;
   readonly brainName: string;
   readonly aiControl: BrainAIHandle | undefined;
+  readonly tlsConfig: { key: string; cert: string } | undefined;
 
   private httpServer: HttpServer | null = null;
   private wss: WebSocketServer | null = null;
@@ -155,6 +162,7 @@ export class BrainRuntime {
     this.port = options.port ?? parseInt(process.env.BLAXIN_BRAIN_PORT || '3100', 10);
     this.brainName = (options.name ?? process.env.BLAXIN_BRAIN_NAME) || 'Blaxin Brain';
     this.aiControl = options.aiControl;
+    this.tlsConfig = options.tls;
 
     const dataDir = process.env.BLAXIN_DATA_DIR || '.';
     this.identity = options.identity ?? loadOrCreateIdentity({
@@ -346,6 +354,7 @@ export class BrainRuntime {
       status: 'ok',
       role: 'brain',
       version: APP_VERSION,
+      transport: this.tlsConfig ? 'wss' : 'ws',
       protocol: { version: PROTOCOL_VERSION, min: PROTOCOL_MIN_SUPPORTED, max: PROTOCOL_MAX_SUPPORTED },
       brainId: this.identity.id,
       uptime: process.uptime(),
@@ -360,12 +369,24 @@ export class BrainRuntime {
 
   // ── Lifecycle ─────────────────────────────────────────────────
 
-  async start(): Promise<{ host: string; port: number; wsUrl: string }> {
+  async start(): Promise<{ host: string; port: number; wsUrl: string; secure: boolean }> {
     if (this.started) return this.addressInfo();
     this.started = true;
 
     const app = this.buildHttp();
-    const server = createServer(app);
+    // TLS configured → https server (WSS only). A TLS-configured port
+    // never speaks plaintext, so a ws:// downgrade attempt fails at the
+    // TLS handshake before a single protocol byte is exchanged.
+    let server: HttpServer;
+    if (this.tlsConfig) {
+      try {
+        server = createHttpsServer({ key: this.tlsConfig.key, cert: this.tlsConfig.cert }, app) as unknown as HttpServer;
+      } catch (error: any) {
+        throw new Error(`Invalid TLS key/certificate for the Brain: ${error.message}`);
+      }
+    } else {
+      server = createHttpServer(app);
+    }
     this.httpServer = server;
 
     const wss = new WebSocketServer({
@@ -416,7 +437,10 @@ export class BrainRuntime {
     });
 
     const info = this.addressInfo();
-    logger.info('brain', `BLAXIN Brain listening on ws://${info.host}:${info.port}/ws/brain (brain ${this.identity.id})`);
+    logger.info(
+      'brain',
+      `BLAXIN Brain listening on ${info.secure ? 'wss' : 'ws'}://${info.host}:${info.port}/ws/brain (brain ${this.identity.id}, ${info.secure ? 'TLS' : 'plaintext — loopback/dev only'})`,
+    );
     return info;
   }
 
@@ -1179,10 +1203,11 @@ export class BrainRuntime {
     }
   }
 
-  private addressInfo(): { host: string; port: number; wsUrl: string } {
+  private addressInfo(): { host: string; port: number; wsUrl: string; secure: boolean } {
     const addr = this.httpServer?.address();
     const port = typeof addr === 'object' && addr ? addr.port : this.port;
-    return { host: this.host, port, wsUrl: `ws://${this.host}:${port}/ws/brain` };
+    const secure = !!this.tlsConfig;
+    return { host: this.host, port, wsUrl: `${secure ? 'wss' : 'ws'}://${this.host}:${port}/ws/brain`, secure };
   }
 }
 

@@ -162,6 +162,9 @@ For a remote web deployment behind a public domain, set e.g. `BLAXIN_ALLOWED_ORI
 | `BLAXIN_BRAIN_HOST` / `BLAXIN_BRAIN_PORT` | Brain bind address (Brain process; default `127.0.0.1:3100`) |
 | `BLAXIN_BRAIN_DEFAULT_DRIVER` | Brain task driver: `llm` (default) or `deterministic` |
 | `BLAXIN_BRAIN_PROVIDER` / `BLAXIN_BRAIN_MODEL` | Active AI provider/model on the standalone Brain (e.g. `openrouter` / `openrouter/auto`) |
+| `BLAXIN_BRAIN_TLS_KEY` / `BLAXIN_BRAIN_TLS_CERT` | Brain PEM file paths — when both are set the Brain serves WSS only (remote Bodies must connect with `wss://`) |
+| `BLAXIN_BRAIN_CA_FILE` | Body: PEM CA bundle that signed the Brain's TLS certificate (private/self-signed LAN setups) |
+| `BLAXIN_BRAIN_ALLOW_INSECURE` | Body: `1` = explicit dev override allowing plaintext `ws://` off-loopback and skipping certificate checks (never default) |
 
 ## Memory
 
