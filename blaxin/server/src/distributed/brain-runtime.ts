@@ -52,11 +52,33 @@ export interface BrainRuntimeOptions {
   defaultDriverId?: string;
   /** Extra browser origins allowed to reach the brain control plane. */
   extraAllowedOrigins?: string[];
+  /** Optional AI model control plane (the Brain owns the providers). When
+   * provided, the runtime exposes admin-gated /ai/status + /ai/select.
+   * Kept injectable so the runtime stays provider-agnostic. */
+  aiControl?: BrainAIHandle;
   now?: () => number;
   /** Human name of this brain (default: os hostname). */
   name?: string;
   identityFile?: string;
   registryFile?: string;
+}
+
+/** Minimal provider-control surface a Brain process can expose. The
+ * Brain (not the Body) owns provider credentials; this lets an operator
+ * inspect/select the active model on a standalone Brain. */
+export interface BrainAIHandle {
+  status(): {
+    activeProvider: string | null;
+    activeModel: string | null;
+    providers: Array<{
+      id: string;
+      name: string;
+      apiKeyRequired: boolean;
+      hasKey: boolean;
+      healthy: boolean;
+    }>;
+  };
+  select(providerId: string, modelId?: string): { ok: boolean; error?: string };
 }
 
 const HELLO_TIMEOUT_MS = 15_000;
@@ -113,6 +135,7 @@ export class BrainRuntime {
   readonly port: number;
   readonly now: () => number;
   readonly brainName: string;
+  readonly aiControl: BrainAIHandle | undefined;
 
   private httpServer: HttpServer | null = null;
   private wss: WebSocketServer | null = null;
@@ -131,6 +154,7 @@ export class BrainRuntime {
     this.host = (options.host ?? process.env.BLAXIN_BRAIN_HOST) || '127.0.0.1';
     this.port = options.port ?? parseInt(process.env.BLAXIN_BRAIN_PORT || '3100', 10);
     this.brainName = (options.name ?? process.env.BLAXIN_BRAIN_NAME) || 'Blaxin Brain';
+    this.aiControl = options.aiControl;
 
     const dataDir = process.env.BLAXIN_DATA_DIR || '.';
     this.identity = options.identity ?? loadOrCreateIdentity({
@@ -252,6 +276,40 @@ export class BrainRuntime {
       this.disconnectBody(bodyId, CLOSE.POLICY, 'Device removed');
       res.json({ success: true, bodyId });
     });
+
+    // AI model control plane — only present when a provider handle is
+    // attached (the standalone Brain owns the providers). The Body must
+    // never reach these; they are admin-gated like /pairing and /devices.
+    if (this.aiControl) {
+      app.get('/ai/status', (req, res) => {
+        if (!this.allowAdminRequest(req)) {
+          return res.status(403).json({ error: 'Forbidden', code: 'ADMIN_RESTRICTED' });
+        }
+        res.json({
+          ...this.aiControl!.status(),
+          drivers: [...this.drivers.keys()],
+          defaultDriver: this.defaultDriverId,
+        });
+      });
+
+      app.post('/ai/select', (req, res) => {
+        if (!this.allowAdminRequest(req)) {
+          return res.status(403).json({ error: 'Forbidden', code: 'ADMIN_RESTRICTED' });
+        }
+        const { providerId, modelId } = req.body || {};
+        if (typeof providerId !== 'string' || !providerId.trim()) {
+          return res.status(400).json({ error: 'providerId is required', code: 'BAD_REQUEST' });
+        }
+        const result = this.aiControl!.select(
+          providerId.trim().slice(0, 64),
+          typeof modelId === 'string' && modelId.trim() ? modelId.trim().slice(0, 128) : undefined,
+        );
+        if (!result.ok) {
+          return res.status(400).json({ error: result.error || 'Unknown provider', code: 'BAD_REQUEST' });
+        }
+        res.json({ success: true, ...this.aiControl!.status() });
+      });
+    }
 
     // 404 for anything unknown.
     app.use((_req, res) => {

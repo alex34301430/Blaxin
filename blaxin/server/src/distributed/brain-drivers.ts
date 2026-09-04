@@ -70,8 +70,11 @@ export interface DeterministicDriverOptions {
 export class DeterministicDriver implements BrainTaskDriver {
   readonly id = 'deterministic';
   readonly name = 'Deterministic test driver';
+  readonly maxActionWaitMs: number;
 
-  constructor(private readonly options: DeterministicDriverOptions) {}
+  constructor(private readonly options: DeterministicDriverOptions) {
+    this.maxActionWaitMs = options.maxActionWaitMs ?? DEFAULT_ACTION_WAIT_MS;
+  }
 
   async run(ctx: BrainTaskContext): Promise<DriverOutcome> {
     const summary: string[] = [];
@@ -81,16 +84,20 @@ export class DeterministicDriver implements BrainTaskDriver {
       }
       ctx.update('executing', step.description);
       const actionId = uuidv4();
-      const result = await ctx.requestAction({
+      const req: TaskActionRequest = {
         taskId: ctx.taskId,
         actionId,
         requestId: actionId,
         action: { tool: step.tool, args: step.args },
         idempotent: step.idempotent !== false,
         description: step.description,
-      });
+      };
+      const result = await withActionTimeout(ctx.requestAction(req), req, this.maxActionWaitMs);
       if (result.outcome === 'denied') {
         return { kind: 'failed', error: `Action denied by the user: ${step.description}`, code: 'DENIED' };
+      }
+      if (isActionTimeout(result)) {
+        return { kind: 'failed', error: 'The Body did not respond to the requested action in time. The task was stopped — no result was fabricated.', code: 'TIMEOUT' };
       }
       if (result.outcome === 'rejected') {
         return { kind: 'failed', error: result.error || 'Action rejected by the Body', code: 'REJECTED' };
@@ -146,7 +153,49 @@ RULES:
 6. Never claim you ran a command yourself — you requested it from the Body.
 7. When the user's request is fully handled (or you hit a hard limit), reply with a concise final answer to the user.`;
 
-const MAX_CONFIRMATION_WAIT_MS = 120 * 1000;
+const DEFAULT_ACTION_WAIT_MS = 120 * 1000;
+
+/** ActionResult the driver fabricates when the Body never answers. */
+function actionTimedOut(req: TaskActionRequest, waitMs: number): ActionResult {
+  return {
+    taskId: req.taskId,
+    actionId: req.actionId,
+    requestId: req.requestId,
+    outcome: 'rejected',
+    executed: false,
+    replay: false,
+    success: false,
+    error: `ACTION_TIMEOUT: no result from the Body within ${Math.round(waitMs / 1000)}s`,
+  };
+}
+
+/** True for the fabricated timeout result (the Body went silent). */
+function isActionTimeout(result: ActionResult): boolean {
+  return result.outcome === 'rejected' && (result.error || '').startsWith('ACTION_TIMEOUT');
+}
+
+/** Race an action request against a bounded wait: the reasoning layer must
+ * never wait forever on a Body that stopped responding. The pending brain
+ * action is abandoned (and cleaned up on disconnect); the task fails
+ * honestly instead of hanging or faking completion. */
+async function withActionTimeout(
+  request: Promise<ActionResult>,
+  req: TaskActionRequest,
+  waitMs: number,
+): Promise<ActionResult> {
+  if (waitMs <= 0) return request;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      request,
+      new Promise<ActionResult>((resolve) => {
+        timer = setTimeout(() => resolve(actionTimedOut(req, waitMs)), waitMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
 
 export class LLMTaskDriver implements BrainTaskDriver {
   readonly id = 'llm';
@@ -157,14 +206,25 @@ export class LLMTaskDriver implements BrainTaskDriver {
 
   constructor(private readonly options: LLMDriverOptions) {
     this.maxSteps = options.maxSteps ?? 20;
-    this.maxActionWaitMs = options.maxActionWaitMs ?? MAX_CONFIRMATION_WAIT_MS;
+    this.maxActionWaitMs = options.maxActionWaitMs ?? DEFAULT_ACTION_WAIT_MS;
   }
 
   async run(ctx: BrainTaskContext): Promise<DriverOutcome> {
     const providerId = this.options.providers.getActiveProvider();
     const modelId = this.options.providers.getActiveModel();
-    if (!providerId || !modelId) {
-      return { kind: 'failed', error: 'No AI provider or model configured on the Brain. Configure a provider in Brain settings.', code: 'NO_PROVIDER' };
+    if (!providerId) {
+      return {
+        kind: 'failed',
+        error: 'No AI provider is configured on the Brain. Set BLAXIN_BRAIN_PROVIDER (e.g. openrouter) or select one via POST /ai/select.',
+        code: 'NO_PROVIDER',
+      };
+    }
+    if (!modelId) {
+      return {
+        kind: 'failed',
+        error: 'No AI model is selected on the Brain. Set BLAXIN_BRAIN_MODEL or select one via POST /ai/select.',
+        code: 'NO_MODEL',
+      };
     }
     const provider = this.options.providers.getProvider(providerId);
     if (!provider.hasApiKey()) {
@@ -205,12 +265,25 @@ export class LLMTaskDriver implements BrainTaskDriver {
         return { kind: 'failed', error: `Model error: ${error.message}`, code: 'MODEL_ERROR' };
       }
 
-      const calls = (response.toolCalls || []).filter((tc) =>
+      const rawCalls = response.toolCalls || [];
+      const calls = rawCalls.filter((tc) =>
         ctx.tools.some((t) => t.function.name === tc.function.name),
       );
 
+      if (rawCalls.length > 0 && calls.length === 0) {
+        // The model wanted tools this Body never advertised. Treating this
+        // as a final answer would FAKE completion of the user's task, so
+        // fail honestly instead.
+        const wanted = [...new Set(rawCalls.map((tc) => tc.function.name))].join(', ');
+        return {
+          kind: 'failed',
+          error: `The model requested tools the Body does not offer: ${wanted}`,
+          code: 'UNKNOWN_TOOL',
+        };
+      }
+
       if (calls.length === 0) {
-        // Final answer.
+        // No tool calls: this is the model's final answer to the user.
         return { kind: 'completed', summary: response.message.content || 'Done.' };
       }
 
@@ -228,14 +301,19 @@ export class LLMTaskDriver implements BrainTaskDriver {
       for (const call of calls) {
         const actionId = `${call.id}_${ctx.taskId.slice(0, 8)}`;
         const args = this.parseArgs(call);
-        const actionResult = await ctx.requestAction({
+        const req: TaskActionRequest = {
           taskId: ctx.taskId,
           actionId,
           requestId: actionId,
           action: { tool: call.function.name, args },
           idempotent: this.isIdempotent(call.function.name, args),
           description: this.describeCall(call.function.name, args),
-        });
+        };
+        const actionResult = await withActionTimeout(
+          ctx.requestAction(req),
+          req,
+          this.maxActionWaitMs,
+        );
         const toolText = this.actionResultToText(actionResult, call.function.name);
         history.push({
           id: uuidv4(),
@@ -246,9 +324,17 @@ export class LLMTaskDriver implements BrainTaskDriver {
           name: call.function.name,
         });
         if (actionResult.outcome === 'denied') {
+          // Honest stop: the user declined; never retry or fake success.
           return {
             kind: 'completed',
             summary: `The user did not approve ${call.function.name}, so I stopped. ${response.message.content || ''}`.trim(),
+          };
+        }
+        if (isActionTimeout(actionResult)) {
+          return {
+            kind: 'failed',
+            error: 'The Body did not respond to the requested action in time. The task was stopped — no result was fabricated.',
+            code: 'TIMEOUT',
           };
         }
         if (actionResult.outcome === 'rejected') {

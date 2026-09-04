@@ -94,6 +94,45 @@ After pairing, the Body stores the Brain's **public key only** and every
 future connection authenticates both directions with Ed25519
 challenge/response signatures — no code required.
 
+## Brain AI providers (the real LLM path)
+
+The Brain owns the AI providers. Provider credentials stay on the Brain
+device (encrypted credential store or environment variables) and never
+enter the Brain↔Body protocol. To give the standalone Brain a real
+model:
+
+```bash
+# Brain process — pick the active provider/model up front:
+OPENROUTER_API_KEY=sk-or-... \
+BLAXIN_BRAIN_PROVIDER=openrouter \
+BLAXIN_BRAIN_MODEL=openrouter/auto \
+npm run brain
+```
+
+Supported key env vars: `OPENROUTER_API_KEY`, `OPENAI_API_KEY`,
+`ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `GROQ_API_KEY`,
+`TOGETHER_API_KEY` (`ollama` needs no key). Keys can alternatively live
+in the encrypted credential store on the Brain device. At boot the Brain
+loads keys, honours `BLAXIN_BRAIN_PROVIDER` / `BLAXIN_BRAIN_MODEL`, and
+otherwise auto-selects the first provider that is ready. If no
+provider/model is configured, LLM tasks fail **honestly**
+(`NO_PROVIDER` / `NO_MODEL`) — the Brain never guesses a model.
+
+Operator control plane (loopback admin only, same gating as `/pairing`;
+the Body never reaches these):
+
+```
+GET  /ai/status    # active provider/model + per-provider key/health
+POST /ai/select    # { providerId, modelId? }
+```
+
+LLM reasoning runs as the `llm` task driver (the default). The driver
+only ever *requests* structured actions and waits (bounded, honest
+timeout) for the Body's result; it never executes anything itself, never
+touches provider keys after configuration, and refuses to treat "the
+model wanted a tool the Body does not offer" as a final answer
+(`UNKNOWN_TOOL`, no fake completion).
+
 ## Device identity
 
 - Every device generates a persistent Ed25519 keypair on first run.
@@ -228,8 +267,9 @@ path when configured.
   enforced.
 - Brain HTTP surface: `GET /health`, `/version`, `/protocol`,
   `/capabilities`, `/pairing`, `POST /pairing/start`, `/pairing/cancel`,
-  `GET /devices`, `POST /devices/:id/revoke`, `DELETE /devices/:id`.
-  Admin endpoints default to loopback-only.
+  `GET /devices`, `POST /devices/:id/revoke`, `DELETE /devices/:id`,
+  `GET /ai/status`, `POST /ai/select` (present when an AI control-plane
+  handle is attached). Admin endpoints default to loopback-only.
 - Provider/API keys live on the Brain device only and never enter the
   protocol. GitHub credentials are never part of pairing, the protocol,
   telemetry or logs.
@@ -252,12 +292,36 @@ cd server
 npm test                       # full suite (embedded + distributed)
 npx vitest run src/__tests__/distributed            # distributed layer
 npx vitest run src/__tests__/distributed/two-process-e2e.test.ts   # 2 real processes
+npx vitest run src/__tests__/distributed/llm-driver.test.ts         # LLM driver unit tests
 npm run bench                  # performance guard rails
 ```
 
 The distributed E2E spawns a real Brain process and a real Body server,
 pairs them, executes a real filesystem action, restarts both processes
-and verifies revocation.
+and verifies revocation. `brain-llm-integration.test.ts` drives the full
+LLM task loop over real sockets with a scripted model and a real
+filesystem tool (no credentials needed).
+
+### Live provider validation (opt-in)
+
+The full real-provider loop — real user task → real Brain process →
+actual AI provider → action request → Body execution → final answer —
+is covered by an opt-in two-process test that is **skipped by default**
+and runs only when you supply a Brain-side provider key in your shell
+(the key is never written to disk or committed):
+
+```bash
+cd server
+OPENROUTER_API_KEY=sk-or-... \
+BLAXIN_BRAIN_PROVIDER=openrouter \
+BLAXIN_BRAIN_MODEL=openrouter/auto \
+BLAXIN_LIVE_BRAIN_E2E=1 \
+  npx vitest run src/__tests__/distributed/live-llm-brain.test.ts
+```
+
+Keyless local providers work too (`BLAXIN_BRAIN_PROVIDER=ollama`). The
+live test fails loudly on provider/model/key problems — it never
+fabricates a result.
 
 ## Roadmap (not yet implemented)
 

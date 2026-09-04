@@ -31,6 +31,8 @@ The Brain never executes commands on the Body — it sends structured, capabilit
 
 Default mode is unchanged (`embedded` = the local orchestrator acts as the Brain in-process). Enable external mode with `BLAXIN_BRAIN_MODE=external`. See **[docs/distributed-brain.md](docs/distributed-brain.md)** for the full architecture, pairing quick start, protocol and security model.
 
+The standalone Brain runs the real LLM path: configure its provider and model with `BLAXIN_BRAIN_PROVIDER` / `BLAXIN_BRAIN_MODEL` plus the provider key env var (keys stay on the Brain device, never in the protocol), and it reasons by requesting structured actions from the Body. See the docs for the live-provider validation instructions.
+
 ## Features
 
 - **Multi-Provider AI Support**: OpenRouter (first-class), OpenAI, Anthropic, Google, Groq, Together, Ollama
@@ -159,6 +161,7 @@ For a remote web deployment behind a public domain, set e.g. `BLAXIN_ALLOWED_ORI
 | `BLAXIN_BODY_NAME` | Display name of this Body when pairing |
 | `BLAXIN_BRAIN_HOST` / `BLAXIN_BRAIN_PORT` | Brain bind address (Brain process; default `127.0.0.1:3100`) |
 | `BLAXIN_BRAIN_DEFAULT_DRIVER` | Brain task driver: `llm` (default) or `deterministic` |
+| `BLAXIN_BRAIN_PROVIDER` / `BLAXIN_BRAIN_MODEL` | Active AI provider/model on the standalone Brain (e.g. `openrouter` / `openrouter/auto`) |
 
 ## Memory
 
