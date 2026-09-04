@@ -319,9 +319,15 @@ BLAXIN_LIVE_BRAIN_E2E=1 \
   npx vitest run src/__tests__/distributed/live-llm-brain.test.ts
 ```
 
-Keyless local providers work too (`BLAXIN_BRAIN_PROVIDER=ollama`). The
-live test fails loudly on provider/model/key problems — it never
-fabricates a result.
+Keyless local providers work too (`BLAXIN_BRAIN_PROVIDER=ollama`).
+Verified in practice with `BLAXIN_BRAIN_MODEL=llama3.2:3b`: the model
+called the Body's filesystem tool for real and the marker content came
+back in its final answer (the printed `[live-e2e]` transcript shows
+`thinking -> executing -> thinking -> completed`). Use a model with
+tool-calling support and allow generous time — CPU inference takes ~30s
+per reasoning step, which is why the test budget is 4 minutes. The live
+test fails loudly on provider/model/key problems — it never fabricates
+a result.
 
 ## Roadmap (not yet implemented)
 

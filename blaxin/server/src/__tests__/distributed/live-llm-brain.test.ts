@@ -232,18 +232,31 @@ describe.skipIf(!LIVE_ENABLED)('live Brain LLM E2E (opt-in, real provider)', () 
     }));
 
     // Wait for a real terminal answer from the provider through the Brain.
-    await poll(async () => events.some((e) => e.event === 'agent-message'), 120_000, 'final agent message from the live model');
+    // Local CPU inference (e.g. ollama) can take minutes across reasoning
+    // steps, so this budget is generous — the poll still fails loudly when
+    // the provider/model path is actually broken.
+    await poll(async () => events.some((e) => e.event === 'agent-message'), 240_000, 'final agent message from the live model');
     const errors = events.filter((e) => e.event === 'error');
     expect(errors).toEqual([]); // provider/model failures surface as errors — never silently
     const final = events.find((e) => e.event === 'agent-message');
     expect(final?.data).toBeTruthy();
     // Honest terminal state, not a fabricated one.
     expect(hasEvent(events, 'task-complete') || hasEvent(events, 'agent-state', (d) => d.state === 'completed')).toBe(true);
+
+    // Operator transcript: lets the person running the live test see
+    // whether the model really drove a Body tool (agent-state goes through
+    // thinking/executing) and whether the real file content came back.
+    const states = events.filter((e) => e.event === 'agent-state').map((e) => String((e.data as any)?.state));
+    const finalText = JSON.stringify(final?.data ?? {});
+    console.log(`[live-e2e] agent states observed: ${states.join(' -> ') || '(none)'}`);
+    console.log(`[live-e2e] final answer contains the marker file content: ${finalText.includes(markerContent)}`);
+    console.log(`[live-e2e] final answer: ${finalText.slice(0, 500)}`);
+
     // The model was told the marker path; when it used the tool the real
     // content comes back. (A pure-text answer is allowed — the point of
     // this test is the provider round trip, not forcing tool use.)
     ws.close();
-  }, 150_000);
+  }, 300_000);
 });
 
 function hasEvent(events: Array<{ event: string; data: any }>, event: string, predicate?: (d: any) => boolean): boolean {

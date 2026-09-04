@@ -57,6 +57,7 @@ class ScriptedProvider implements LLMProviderLike {
   id = FAKE_PROVIDER;
   name = 'Fake Brain Provider';
   hasKey = true;
+  apiKeyRequired = true;
   chats: Array<{ messages: ChatMessage[]; model: string; tools?: ToolDefinition[] }> = [];
   private queue: Array<(messages: ChatMessage[]) => AIResponse | Error> = [];
 
@@ -255,6 +256,17 @@ describe('LLMTaskDriver', () => {
     expect(failed.code).toBe('NO_API_KEY');
     expect(failed.error).toContain('No API key');
     expect(h.provider.chats).toHaveLength(0);
+  });
+
+  it('does not demand a key from keyless local providers (ollama)', async () => {
+    const h = makeHarness();
+    h.provider.hasKey = false;
+    h.provider.apiKeyRequired = false; // local model, no key needed
+    h.provider.play(() => textResponse('ran on the local model'));
+    const outcome = await h.driver.run(h.ctx);
+    expect(outcome.kind).toBe('completed');
+    expect((outcome as { summary: string }).summary).toBe('ran on the local model');
+    expect(h.provider.chats).toHaveLength(1); // the call really happened
   });
 
   it('stops immediately when the user denies an action — never retries, never fakes', async () => {

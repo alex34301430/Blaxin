@@ -117,6 +117,9 @@ export class DeterministicDriver implements BrainTaskDriver {
 export interface LLMProviderLike {
   id: string;
   name: string;
+  /** False for keyless local providers (e.g. ollama); when absent the
+   * driver assumes a key is required. */
+  apiKeyRequired?: boolean;
   hasApiKey(): boolean;
   chat(request: {
     messages: ChatMessage[];
@@ -227,7 +230,7 @@ export class LLMTaskDriver implements BrainTaskDriver {
       };
     }
     const provider = this.options.providers.getProvider(providerId);
-    if (!provider.hasApiKey()) {
+    if (provider.apiKeyRequired !== false && !provider.hasApiKey()) {
       return { kind: 'failed', error: `No API key configured for ${provider.name} on the Brain.`, code: 'NO_API_KEY' };
     }
 
