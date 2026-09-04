@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "brain": "tsx src/brain-main.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "vitest run",

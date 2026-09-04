@@ -9,7 +9,7 @@ import { SearchTool } from './search.js';
 import { SystemInfoTool } from './system-info.js';
 import { logger } from '../utils/logger.js';
 
-class ToolRegistry {
+export class ToolRegistry {
   private tools: Map<string, Tool> = new Map();
   private enabledTools: Set<string> = new Set();
 

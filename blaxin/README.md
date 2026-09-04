@@ -18,6 +18,19 @@ Local Provider (Ollama)
 Model
 ```
 
+## Distributed Brain (external intelligence)
+
+BLAXIN can run in a distributed topology: the **Body** (this desktop device: UI, tools, local execution, policy) connects to a **Brain** — a separate process that can run on another laptop, desktop, VM or server and owns the AI providers, reasoning and planning.
+
+```
+User → BLAXIN Body → secure Brain connection → BLAXIN Brain
+        (executes tools)        ← structured actions →      (reasons/plans)
+```
+
+The Brain never executes commands on the Body — it sends structured, capability-checked action requests and the Body validates, optionally confirms with the user, executes through its own tool layer, and returns structured results. Includes persistent Ed25519 device identity (`BLX-BODY-…` / `BLX-BRAIN-…`), one-time 5-minute pairing codes, bidirectional challenge/response authentication, protocol negotiation (v1), capability exchange, heartbeats, reconnect with backoff, duplicate-execution protection and device revocation.
+
+Default mode is unchanged (`embedded` = the local orchestrator acts as the Brain in-process). Enable external mode with `BLAXIN_BRAIN_MODE=external`. See **[docs/distributed-brain.md](docs/distributed-brain.md)** for the full architecture, pairing quick start, protocol and security model.
+
 ## Features
 
 - **Multi-Provider AI Support**: OpenRouter (first-class), OpenAI, Anthropic, Google, Groq, Together, Ollama
@@ -141,6 +154,11 @@ For a remote web deployment behind a public domain, set e.g. `BLAXIN_ALLOWED_ORI
 | `BLAXIN_DATA_DIR` | Directory for config, encrypted credentials and session state (defaults to the working directory when writable, otherwise `~/.local/share/blaxin`) |
 | `BLAXIN_ALLOWED_ORIGINS` | Extra allowed browser origins (comma separated) |
 | `BLAXIN_SECRET` | Hex key (≥ 64 chars) for encrypting stored credentials; otherwise a machine-derived key is used |
+| `BLAXIN_BRAIN_MODE` | `embedded` (default) or `external` (distributed Brain) |
+| `BLAXIN_BRAIN_URL` | Brain WebSocket URL for external mode, e.g. `ws://127.0.0.1:3100/ws/brain` |
+| `BLAXIN_BODY_NAME` | Display name of this Body when pairing |
+| `BLAXIN_BRAIN_HOST` / `BLAXIN_BRAIN_PORT` | Brain bind address (Brain process; default `127.0.0.1:3100`) |
+| `BLAXIN_BRAIN_DEFAULT_DRIVER` | Brain task driver: `llm` (default) or `deterministic` |
 
 ## Memory
 

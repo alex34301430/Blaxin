@@ -1,0 +1,268 @@
+# BLAXIN Body + Brain — distributed architecture
+
+BLAXIN is split into two roles connected by a versioned, authenticated
+protocol:
+
+```
+┌─────────────────────────────┐        ┌──────────────────────────────┐
+│  BLAXIN BODY                │        │  BLAXIN BRAIN                │
+│  (the desktop device)       │        │  (a separate device/VM/VPS)  │
+│                             │        │                              │
+│  UI, Tauri shell            │  wss   │  AI providers & models       │
+│  terminal / filesystem      │◄──────►│  reasoning / planning        │
+│  browser / screenshots      │ secure │  memory / model routing      │
+│  computer control           │  link  │  task orchestration          │
+│  local policy + execution   │        │                              │
+└─────────────────────────────┘        └──────────────────────────────┘
+        user                                          intelligence
+```
+
+The **Brain is the intelligence**, the **Body is the executor**. The
+Brain NEVER runs arbitrary commands on the Body: it sends *structured
+action requests* and the Body validates each one against its own
+capability + policy layer before executing it locally.
+
+```
+User → BODY → (task_start) → BRAIN → reason/plan
+                                    → (task_action) → BODY validates
+                                                      → BODY executes tool
+                                    ← (action_result) ← BODY
+                              → verify → next action / (task_complete)
+```
+
+## Modes
+
+| Mode | When | What runs where |
+|------|------|-----------------|
+| `embedded` (default) | classic single-device desktop app | orchestrator + providers + tools in one process (unchanged behavior) |
+| `external` | distributed Brain on another device | the Body server forwards user tasks to the Brain; the Brain reasons and requests actions |
+
+```bash
+# Body (this device):
+BLAXIN_BRAIN_MODE=external BLAXIN_BRAIN_URL=wss://brain-host:3100/ws/brain npm run dev
+
+# Brain (the other device):
+cd server && npm run brain        # listens on 127.0.0.1:3100 by default
+```
+
+## Quick start (pairing)
+
+1. **Start the Brain** on its own device:
+
+   ```bash
+   cd blaxin/server && npm run brain
+   ```
+
+   The Brain persists its identity (`BLX-BRAIN-XXXX`) in its data dir.
+
+2. **Generate a pairing code** (loopback only by default):
+
+   ```bash
+   curl -X POST http://127.0.0.1:3100/pairing/start
+   # → { "brainId": "BLX-BRAIN-XXXX", "code": "AB7K-92QX", "expiresInSec": 300 }
+   ```
+
+   Or restart the Brain with `BLAXIN_BRAIN_AUTO_PAIRING=1` to print a
+   fresh code at boot. Codes are cryptographically random, expire after
+   5 minutes, are single-use, rate-limited, never logged and never
+   persisted. The code is ONLY the initial trust bootstrap — it never
+   becomes the permanent credential.
+
+3. **Start the Body** in external mode (its own device / the desktop):
+
+   ```bash
+   BLAXIN_BRAIN_MODE=external BLAXIN_BRAIN_URL=wss://<brain-host>:3100/ws/brain npm run dev
+   ```
+
+4. **Pair** from the Body's API (loopback):
+
+   ```bash
+   curl -X POST http://127.0.0.1:3001/api/brain/connect \
+     -H 'Content-Type: application/json' \
+     -d '{"url":"wss://<brain-host>:3100/ws/brain","code":"AB7K-92QX"}'
+   ```
+
+   Watch the status until connected:
+
+   ```bash
+   curl http://127.0.0.1:3001/api/brain/status
+   # → { "mode":"external", "bodyId":"BLX-BODY-XXXX",
+   #      "brain": { "state":"CONNECTED", "brainId":"BLX-BRAIN-XXXX", ... } }
+   ```
+
+After pairing, the Body stores the Brain's **public key only** and every
+future connection authenticates both directions with Ed25519
+challenge/response signatures — no code required.
+
+## Device identity
+
+- Every device generates a persistent Ed25519 keypair on first run.
+- Identity ids are derived from the public key:
+  `BLX-BRAIN-XXXX` / `BLX-BODY-XXXX` (a device cannot claim an id it
+  does not own the key for).
+- Private keys stay on their device (mode `0600` files under the data
+  dir), never leave it, and are never logged, transmitted, put in
+  telemetry, or committed.
+- Identity files are validated on load; a tampered file is rejected and
+  a fresh keypair is generated (rotation) rather than trusting the
+  corrupted record.
+
+## Protocol (Brain Protocol v1)
+
+Every frame is a versioned envelope:
+
+```
+{ v, type, id, ts, from, deviceId, req?, payload? }
+```
+
+Message types: `hello`, `pair_request`, `pair_accept`, `pair_reject`,
+`auth_challenge`, `auth_response`, `auth_result`, `ready`,
+`capabilities`, `state_sync`, `state_sync_ack`, `ack`, `ping`, `pong`,
+`task_start`, `task_update`, `task_action`, `action_result`,
+`approval_required`, `approval_result`, `task_complete`,
+`task_failed`, `error`, `revoked`.
+
+Validation on every inbound frame:
+
+- malformed envelopes, unknown types and direction-forbidden types are
+  rejected (each role may only send its own message types)
+- unsupported protocol versions are rejected
+- protocol ranges are negotiated: `Body [1,2]` + `Brain [2,3]` → `2`;
+  no intersection → `INCOMPATIBLE`, nothing executes
+- payload/frame size caps (512 KB frames, 200 KB payload, bounded
+  nesting depth)
+- replay protection (duplicate message ids within a window are dropped)
+- clock-skew rejection (frames more than 5 minutes from local time)
+
+### Handshake order
+
+1. Body dials the Brain (`/ws/brain`) and sends `hello` with its
+   identity, protocol range and capabilities.
+2. The Brain replies `hello` with its identity + the required mode:
+   `auth` (already paired) or `pair` (unknown device).
+3. `pair` → Body sends `pair_request` with the one-time code and its
+   public key; the Brain validates the code, registers the device and
+   answers `pair_accept` with its own public key. `revoked` is answered
+   with rejection.
+4. Authentication is bidirectional, every connection:
+   - Body proves its key to the Brain (challenge → signature)
+   - Brain proves its key to the Body (challenge → signature)
+   Signatures bind both device ids and the fresh challenge, so a
+   captured handshake cannot be replayed.
+5. The Brain sends `ready`; the Body advertises its **tool schemas** and
+   sends `state_sync`.
+
+## Capabilities
+
+The Body advertises only capabilities it can actually execute
+(`filesystem`, `terminal`, `browser`, `screenshot`, `computer-control`,
+`clipboard`, `search`, `system-info`, …). The Brain checks the
+advertised set before requesting an action and the Body **re-checks on
+every action**. An unsupported action is rejected safely — nothing is
+ever assumed.
+
+## Action execution (the security boundary)
+
+When the Brain wants the Body to do something it sends `task_action`
+with a structured action. The Body:
+
+1. validates the message
+2. checks the tool exists + is enabled (capability gate)
+3. consults its executed-action ledger (duplicate protection)
+4. applies replay safety (a non-idempotent action whose outcome is not
+   recorded is refused, never blindly re-run)
+5. runs the confirmation gate (same policy as the local orchestrator:
+   high-impact tools / dangerous command patterns require user approval;
+   timeout defaults to DENY)
+6. executes through the existing `ToolRegistry` abstraction (never raw
+   `child_process` from a Brain message)
+7. persists the outcome to its ledger, then returns `action_result`
+
+The Brain only ever receives the structured result.
+
+## Reconnect & state
+
+- Connection states: `DISCONNECTED`, `CONNECTING`, `AUTHENTICATING`,
+  `CONNECTED`, `DEGRADED`, `RECONNECTING`, `REVOKED`, `INCOMPATIBLE`,
+  `ERROR`.
+- Heartbeats run both directions; a silent peer is detected and the
+  link reconnects with exponential backoff + jitter
+  (1s → 2s → 4s → 8s → 16s → 30s → 60s cap, reset after a stable
+  connection). No reconnect storms; auth rejections stop retrying after
+  a few attempts instead of hammering.
+- The Body persists an **executed-action ledger** (bounded). If the
+  Brain ever re-sends an action after a reconnect, the Body answers
+  from the ledger instead of executing twice. Actions whose outcome
+  cannot be proven are never guessed at.
+- A task interrupted by a connection loss is reported honestly (never
+  faked as complete). The Brain marks it interrupted; on reconnect the
+  Body tells the user and the task can be re-sent.
+
+## Revocation
+
+- `POST /devices/:id/revoke` (loopback admin) permanently revokes a
+  Body on the Brain. A revoked device is rejected on every future
+  connection — its public key is no longer accepted. Revocation
+  survives the disconnect handler and process restarts (persisted
+  registry).
+- The Body can also clear its saved pairing locally
+  (`POST /api/brain/unpair`).
+
+## Offline behavior
+
+If the Brain disappears the Body reports `brain.state = RECONNECTING /
+ERROR` honestly. Sending a task while offline returns
+`BRAIN_OFFLINE` — no fake AI completion, no silent local fallback for
+tasks that require reasoning. Safe deterministic local operations that
+do not require the Brain remain available through the embedded fast
+path when configured.
+
+## Transport & security
+
+- The transport is an abstraction (currently secure WebSocket / WSS).
+  The Brain serves `/ws/brain` with the same origin validation as the
+  main control plane (no-Origin non-browser clients allowed, browser
+  origins allowlisted). Remote deployments must use WSS; plaintext is
+  for localhost/LAN development only and is never a silent downgrade.
+- WebSocket servers keep `perMessageDeflate` disabled and payload caps
+  enforced.
+- Brain HTTP surface: `GET /health`, `/version`, `/protocol`,
+  `/capabilities`, `/pairing`, `POST /pairing/start`, `/pairing/cancel`,
+  `GET /devices`, `POST /devices/:id/revoke`, `DELETE /devices/:id`.
+  Admin endpoints default to loopback-only.
+- Provider/API keys live on the Brain device only and never enter the
+  protocol. GitHub credentials are never part of pairing, the protocol,
+  telemetry or logs.
+
+### Threat-model limits (documented, not hidden)
+
+- Message *authentication* is per-connection Ed25519 challenge/response
+  (fresh nonces, both directions). Message *confidentiality/integrity*
+  on the wire comes from WSS; on plaintext LAN a passive/active network
+  attacker who can hijack the TCP stream during the initial unpaired
+  pairing exchange could substitute their own key (classic TOFU
+  bootstrap problem — SSH solves the same problem with out-of-band host
+  key verification). Use WSS for anything remote and treat the pairing
+  exchange over untrusted networks accordingly.
+
+## Running the tests
+
+```bash
+cd server
+npm test                       # full suite (embedded + distributed)
+npx vitest run src/__tests__/distributed            # distributed layer
+npx vitest run src/__tests__/distributed/two-process-e2e.test.ts   # 2 real processes
+npm run bench                  # performance guard rails
+```
+
+The distributed E2E spawns a real Brain process and a real Body server,
+pairs them, executes a real filesystem action, restarts both processes
+and verifies revocation.
+
+## Roadmap (not yet implemented)
+
+Multi-body UI, model router, Brain-owned memory store, LAN discovery,
+QR pairing, relay transport, coordinated signed releases and update
+compatibility are future phases — the backend architecture (one Brain →
+many Bodies, persistent device registry, protocol negotiation,
+revocation) already supports them.

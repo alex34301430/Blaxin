@@ -22,7 +22,70 @@ import {
 import { isVersionNewer, isMajorVersionUpgrade } from './utils/semver.js';
 import { isValidUserMessage, normalizeUserMessage } from './utils/validation.js';
 import { APP_VERSION, GITHUB_REPO, GITHUB_RELEASES_URL } from './utils/version.js';
+import { dataPath } from './utils/paths.js';
+import { loadOrCreateIdentity } from './distributed/identity.js';
+import { RemoteBrainDriver } from './distributed/remote-brain.js';
 import { ProviderId, AppConfig } from './types.js';
+
+// ── External Brain mode ─────────────────────────────────────────
+// BLAXIN runs in one of two modes:
+//   embedded (default) — the local orchestrator + providers act as the
+//                        Brain in the same process (classic desktop app)
+//   external           — this device is the BODY; intelligence comes from
+//                        a separate BLAXIN Brain process (see brain-main)
+// In external mode the orchestrator is bypassed for user tasks: the
+// Brain drives the task and the Body executes only structured actions
+// it has validated against its own capability/policy layer.
+const BRAIN_MODE: 'embedded' | 'external' =
+  process.env.BLAXIN_BRAIN_MODE === 'external' ? 'external' : 'embedded';
+const BRAIN_URL = process.env.BLAXIN_BRAIN_URL || '';
+
+let remoteBrain: RemoteBrainDriver | null = null;
+
+/** Lazily build the external-Brain driver (body identity + link). */
+function getRemoteBrain(): RemoteBrainDriver | null {
+  if (BRAIN_MODE !== 'external') return null;
+  if (!remoteBrain) {
+    const identity = loadOrCreateIdentity({
+      filePath: dataPath('body-identity.json'),
+      role: 'body',
+      name: process.env.BLAXIN_BODY_NAME || 'Blaxin Body',
+    });
+    remoteBrain = new RemoteBrainDriver({
+      identity,
+      url: BRAIN_URL || 'ws://127.0.0.1:3100/ws/brain',
+      onEvent: broadcast,
+    });
+    // Auto-connect at boot only when a Brain URL was configured (the
+    // pairing code, if any, is supplied later through /api/brain/connect).
+    if (BRAIN_URL) {
+      remoteBrain.connect();
+    }
+  }
+  return remoteBrain;
+}
+
+function isExternalMode(): boolean {
+  return BRAIN_MODE === 'external';
+}
+
+/** (Re)point the remote-Brain driver at a new Brain URL and connect.
+ * Used by /api/brain/connect when the operator changes the Brain. */
+function reconnectRemoteBrain(url: string, code?: string): void {
+  if (BRAIN_MODE !== 'external') return;
+  remoteBrain?.disconnect();
+  const identity = loadOrCreateIdentity({
+    filePath: dataPath('body-identity.json'),
+    role: 'body',
+    name: process.env.BLAXIN_BODY_NAME || 'Blaxin Body',
+  });
+  remoteBrain = new RemoteBrainDriver({
+    identity,
+    url,
+    onEvent: broadcast,
+  });
+  remoteBrain.connect(code);
+}
 
 const PORT = parseInt(process.env.PORT || '3001');
 const HOST = process.env.BLAXIN_HOST || '0.0.0.0';
@@ -236,6 +299,12 @@ app.post('/api/agent/message', async (req, res) => {
   }
   
   // Start processing in background, WebSocket will deliver updates
+  if (isExternalMode()) {
+    const brain = getRemoteBrain();
+    if (!brain) return res.status(409).json({ error: 'External mode is not enabled', code: 'MODE' });
+    brain.sendUserMessage(normalizeUserMessage(message));
+    return res.json({ success: true, mode: 'external' });
+  }
   orchestrator.processMessage(message).catch(err => {
     logger.error('api', 'Agent processing failed', err);
   });
@@ -244,17 +313,84 @@ app.post('/api/agent/message', async (req, res) => {
 });
 
 app.post('/api/agent/stop', (_req, res) => {
+  if (isExternalMode()) {
+    getRemoteBrain()?.stopTask();
+    return res.json({ success: true, mode: 'external' });
+  }
   orchestrator.stop();
   res.json({ success: true });
 });
 
 app.post('/api/agent/clear', (_req, res) => {
+  if (isExternalMode()) {
+    getRemoteBrain()?.clearHistory();
+    return res.json({ success: true, mode: 'external' });
+  }
   orchestrator.clearHistory();
   res.json({ success: true });
 });
 
 app.get('/api/agent/history', (_req, res) => {
+  if (isExternalMode()) {
+    return res.json([]); // conversation history lives on the Brain
+  }
   res.json(orchestrator.getConversationHistory());
+});
+
+// ── Brain connection endpoints (external mode) ─────────────────
+app.get('/api/brain/status', (_req, res) => {
+  const brain = getRemoteBrain();
+  res.json({
+    mode: BRAIN_MODE,
+    bodyId: brain?.status().bodyId ?? null,
+    ...(brain ? brain.status() : {}),
+  });
+});
+
+// Connect (optionally pairing with a fresh code) to a Brain.
+app.post('/api/brain/connect', (req, res) => {
+  if (!isExternalMode()) {
+    return res.status(409).json({ error: 'External Brain mode is disabled (BLAXIN_BRAIN_MODE=external).', code: 'MODE_EMBEDDED' });
+  }
+  const { url, code } = req.body || {};
+  if (typeof url === 'string' && url.trim()) {
+    const parsedUrl = url.trim().replace(/\/+$/, '');
+    if (!/^wss?:\/\//.test(parsedUrl)) {
+      return res.status(400).json({ error: 'Brain URL must start with ws:// or wss://', code: 'BAD_URL' });
+    }
+    // Point the driver at a new Brain (fresh RemoteBrainDriver).
+    reconnectRemoteBrain(parsedUrl, typeof code === 'string' ? code : undefined);
+  } else {
+    getRemoteBrain()?.connect(typeof code === 'string' ? code : undefined);
+  }
+  res.json({ success: true });
+});
+
+app.post('/api/brain/disconnect', (_req, res) => {
+  if (!isExternalMode()) return res.status(409).json({ error: 'Not in external mode', code: 'MODE_EMBEDDED' });
+  getRemoteBrain()?.disconnect();
+  res.json({ success: true });
+});
+
+app.post('/api/brain/reconnect', (_req, res) => {
+  if (!isExternalMode()) return res.status(409).json({ error: 'Not in external mode', code: 'MODE_EMBEDDED' });
+  const brain = getRemoteBrain();
+  if (brain) {
+    brain.disconnect();
+    brain.connect();
+  }
+  res.json({ success: true });
+});
+
+// Forget the saved Brain pairing on this Body (does not touch the Brain).
+app.post('/api/brain/unpair', (_req, res) => {
+  if (!isExternalMode()) return res.status(409).json({ error: 'Not in external mode', code: 'MODE_EMBEDDED' });
+  const brain = getRemoteBrain();
+  if (brain) {
+    brain.disconnect();
+    brain.forgetPairing();
+  }
+  res.json({ success: true });
 });
 
 // Memory endpoints
@@ -340,15 +476,19 @@ server.on('upgrade', (request, socket, head) => {
   }
 });
 
-// Broadcast orchestrator events to ALL connected clients
-orchestrator.setEventCallback((event, data) => {
+// Broadcast agent events to ALL connected clients. The event source is
+// either the local orchestrator (embedded mode) or the remote Brain
+// driver (external mode) — the wire format is identical.
+function broadcast(event: string, data: unknown): void {
   const message = JSON.stringify({ event, data });
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message);
     }
   });
-});
+}
+
+orchestrator.setEventCallback((event, data) => broadcast(event, data));
 
 wss.on('connection', (ws) => {
   logger.info('websocket', 'Client connected');
@@ -367,20 +507,36 @@ wss.on('connection', (ws) => {
             }));
             break;
           }
-          await orchestrator.processMessage(normalizeUserMessage(content));
+          if (isExternalMode()) {
+            getRemoteBrain()?.sendUserMessage(normalizeUserMessage(content));
+          } else {
+            await orchestrator.processMessage(normalizeUserMessage(content));
+          }
           break;
         }
         case 'stop':
-          orchestrator.stop();
+          if (isExternalMode()) {
+            getRemoteBrain()?.stopTask();
+          } else {
+            orchestrator.stop();
+          }
           break;
         case 'clear':
-          orchestrator.clearHistory();
+          if (isExternalMode()) {
+            getRemoteBrain()?.clearHistory();
+          } else {
+            orchestrator.clearHistory();
+          }
           break;
         case 'ping':
           ws.send(JSON.stringify({ event: 'pong', data: { timestamp: Date.now() } }));
           break;
         case 'confirmation-response':
-          orchestrator.respondToConfirmation(msg.data?.stepId, msg.data?.approved === true);
+          if (isExternalMode()) {
+            getRemoteBrain()?.respondToConfirmation(msg.data?.stepId, msg.data?.approved === true);
+          } else {
+            orchestrator.respondToConfirmation(msg.data?.stepId, msg.data?.approved === true);
+          }
           break;
       }
     } catch (error: any) {
@@ -397,14 +553,19 @@ wss.on('connection', (ws) => {
   });
 
   // Send initial state
+  const connectedPayload: Record<string, unknown> = {
+    state: orchestrator.getState(),
+    activeProvider: providers.getActiveProvider(),
+    activeModel: providers.getActiveModel(),
+    description: orchestrator.getCurrentDescription(),
+  };
+  if (isExternalMode()) {
+    connectedPayload.mode = 'external';
+    connectedPayload.brain = getRemoteBrain()?.status() ?? null;
+  }
   ws.send(JSON.stringify({
     event: 'connected',
-    data: {
-      state: orchestrator.getState(),
-      activeProvider: providers.getActiveProvider(),
-      activeModel: providers.getActiveModel(),
-      description: orchestrator.getCurrentDescription(),
-    },
+    data: connectedPayload,
   }));
 });
 
@@ -447,6 +608,8 @@ server.listen(PORT, HOST, async () => {
 const shutdown = () => {
   logger.info('server', 'Shutting down...');
   sessionState.stopAutoSave();
+  // Drop the Brain connection cleanly (no auto-reconnect during exit).
+  remoteBrain?.disconnect();
   // Persist any unflushed telemetry (best-effort sync flush — this is the
   // shutdown path, not the agent hot path).
   telemetry.flushSync();
