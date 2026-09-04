@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { BrainStatusResponse } from '../services/api';
 
 export type AgentState = 'idle' | 'thinking' | 'planning' | 'executing' | 'observing' | 'waiting' | 'completed' | 'error' | 'requires-confirmation';
 
@@ -97,6 +98,12 @@ interface AppState {
   voiceTranscript: string;
   setVoiceTranscript: (transcript: string) => void;
 
+  // Distributed Brain (external mode) — snapshot of the authoritative
+  // server status (the server owns the connection state machine; the UI
+  // only mirrors it).
+  brainStatus: BrainStatusResponse | null;
+  setBrainStatus: (status: BrainStatusResponse | null) => void;
+
   // Error
   lastError: string | null;
   setLastError: (error: string | null) => void;
@@ -147,6 +154,9 @@ export const useAppStore = create<AppState>((set) => ({
   setIsListening: (listening) => set({ isListening: listening }),
   voiceTranscript: '',
   setVoiceTranscript: (transcript) => set({ voiceTranscript: transcript }),
+
+  brainStatus: null,
+  setBrainStatus: (status) => set({ brainStatus: status }),
 
   lastError: null,
   setLastError: (error) => set({ lastError: error }),

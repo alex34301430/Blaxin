@@ -251,6 +251,9 @@ describe('distributed E2E over WSS (two real processes, real TLS)', () => {
     expect(connected.bodyId).toMatch(/^BLX-BODY-/);
     expect(connected.brain?.brainId).toBe(brainId);
     expect(connected.brain?.transport).toBe('wss'); // the wire is TLS
+    // The UI derives the Brain admin base from this URL — it must be
+    // present and reflect the actual (TLS) transport.
+    expect(connected.brain?.url).toBe(`wss://${targetHost}:${brainPort}/ws/brain`);
     const bodyId = connected.bodyId as string;
 
     // ── 4. Real task over WSS: body UI → brain → filesystem → back ─

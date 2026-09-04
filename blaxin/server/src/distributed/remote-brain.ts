@@ -165,6 +165,7 @@ export class RemoteBrainDriver {
         sessionId: this.sessionId,
         connectedAt: this.connectedAt,
         lastError: this.lastError,
+        url: this.link.url,
         transport: this.link.url.startsWith('wss://') ? 'wss' : 'ws',
         secure: !this.link.url.startsWith('ws://') || this.isLoopbackUrl(),
       },

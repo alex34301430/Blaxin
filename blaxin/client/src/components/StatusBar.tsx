@@ -1,6 +1,6 @@
 import React from 'react';
 import { useAppStore } from '../utils/store';
-import { FiWifi, FiWifiOff, FiCpu, FiSquare, FiTrash2, FiMic } from 'react-icons/fi';
+import { FiWifi, FiWifiOff, FiCpu, FiSquare, FiTrash2, FiMic, FiCpu as FiBrainIcon } from 'react-icons/fi';
 
 const stateColors: Record<string, string> = {
   idle: 'var(--text-muted)',
@@ -27,9 +27,21 @@ const stateLabels: Record<string, string> = {
 };
 
 export function StatusBar({ onStop, onClear }: { onStop: () => void; onClear: () => void }) {
-  const { connected, agentState, agentDescription, activeProvider, activeModel, messages, isListening } = useAppStore();
+  const { connected, agentState, agentDescription, activeProvider, activeModel, messages, isListening, brainStatus, setCurrentPage } = useAppStore();
 
   const showActivity = agentState !== 'idle' && agentState !== 'completed' && agentState !== 'error';
+
+  // Brain badge — mirror of the authoritative server status. ONLINE only
+  // when the Body has a live CONNECTED link to an external Brain; local
+  // (embedded) mode is labelled as such; clicking opens the Brain page.
+  const brainExternal = brainStatus?.mode === 'external';
+  const brainConnected = brainExternal && brainStatus?.brain?.state === 'CONNECTED';
+  const brainState = brainStatus?.brain?.state ?? null;
+  const brainChip = brainStatus === null ? null : {
+    color: brainConnected ? 'var(--accent-green)' : brainExternal ? 'var(--accent-red)' : 'var(--text-muted)',
+    label: brainConnected ? 'BRAIN ONLINE' : brainExternal ? 'BRAIN OFFLINE' : 'BRAIN LOCAL',
+    detail: brainExternal ? (brainState ?? 'DISCONNECTED') : 'embedded',
+  };
 
   return (
     <div style={{
@@ -89,6 +101,25 @@ export function StatusBar({ onStop, onClear }: { onStop: () => void; onClear: ()
         height: 20, 
         background: 'var(--border-subtle)' 
       }} />
+
+      {/* Brain badge */}
+      {brainChip && (
+        <>
+          <button
+            onClick={() => setCurrentPage('brain')}
+            title={`Brain: ${brainChip.detail} — open Brain panel`}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              background: 'transparent', border: 'none', cursor: 'pointer', padding: 0,
+              color: brainChip.color, fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: 1,
+            }}
+          >
+            <FiBrainIcon size={11} />
+            {brainChip.label}
+          </button>
+          <div style={{ width: 1, height: 20, background: 'var(--border-subtle)' }} />
+        </>
+      )}
 
       {/* Provider & Model */}
       {activeProvider && (

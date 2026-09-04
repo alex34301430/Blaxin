@@ -8,6 +8,7 @@ import { StatusBar } from './components/StatusBar';
 import { ConfirmationModal } from './components/ConfirmationModal';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { MetricsPage } from './pages/MetricsPage';
+import { BrainPage } from './pages/BrainPage';
 import { SetupWizard } from './components/SetupWizard';
 import { UpdateNotifier } from './components/UpdateNotifier';
 import { useAppStore } from './utils/store';
@@ -52,6 +53,28 @@ export default function App() {
     loadData();
   }, [connected]);
 
+  // Keep the Brain badge honest: poll the authoritative server status
+  // while connected (the server owns the connection state machine; the
+  // UI only mirrors it). WebSocket brain-status events update it faster.
+  useEffect(() => {
+    if (!connected) return;
+    let cancelled = false;
+    const refreshBrain = async () => {
+      try {
+        const status = await api.getBrainStatus();
+        if (!cancelled) useAppStore.getState().setBrainStatus(status);
+      } catch {
+        /* offline — leave the last known badge */
+      }
+    };
+    refreshBrain();
+    const t = setInterval(refreshBrain, 5000);
+    return () => {
+      cancelled = true;
+      clearInterval(t);
+    };
+  }, [connected]);
+
   return (
     <div className="app-container">
       <div className="grid-overlay" />
@@ -89,6 +112,10 @@ export default function App() {
 
         {currentPage === 'diagnostics' && (
           <DiagnosticsPage />
+        )}
+
+        {currentPage === 'brain' && (
+          <BrainPage />
         )}
       </main>
 

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../utils/store';
 import { getWsUrl } from '../services/endpoints';
+import type { BrainStatusResponse } from '../services/api';
 
 const HEARTBEAT_INTERVAL_MS = 25000;
 const RECONNECT_DELAY_MS = 3000;
@@ -66,7 +67,31 @@ export function useWebSocket() {
               }
               if (data.activeProvider) setActiveProvider(data.activeProvider);
               if (data.activeModel) setActiveModel(data.activeModel);
+              // External mode: the server includes the Brain link snapshot.
+              if (data.mode || data.brain !== undefined) {
+                useAppStore.getState().setBrainStatus({
+                  mode: data.mode === 'external' ? 'external' : 'embedded',
+                  bodyId: data.bodyId ?? null,
+                  brain: data.brain ?? null,
+                });
+              }
               break;
+
+            case 'brain-status': {
+              // Push update for the Brain link state (state changes are
+              // authoritative server-side; the server may also include
+              // phase/brainId/lastError). Merge into the current snapshot.
+              const cur = useAppStore.getState().brainStatus;
+              const merged: BrainStatusResponse = {
+                mode: cur?.mode ?? 'embedded',
+                bodyId: cur?.bodyId ?? null,
+                brain: { ...(cur?.brain ?? {}), ...(data ?? {}) },
+                capabilities: cur?.capabilities,
+                task: cur?.task ?? null,
+              };
+              useAppStore.getState().setBrainStatus(merged);
+              break;
+            }
 
             case 'agent-message':
               addMessage({
