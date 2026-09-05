@@ -53,6 +53,27 @@ function fmtTime(ts?: number | null): string {
   return new Date(ts).toLocaleTimeString();
 }
 
+/** Honest transport wording: TLS is only claimed when the wire is actually
+ * wss. A loopback ws:// link is unencrypted (fine for same-machine dev) and
+ * is labelled as such rather than as "TLS". */
+function transportHuman(brain: BrainLinkStatus | null): string {
+  if (!brain?.transport) return '—';
+  if (brain.transport === 'wss') return 'WSS · TLS';
+  return brain.secure ? 'WS · loopback (unencrypted)' : 'WS · plaintext (dev) — insecure';
+}
+
+function transportBadge(brain: BrainLinkStatus | null): React.ReactNode {
+  if (!brain?.transport) return null;
+  if (brain.transport === 'wss') {
+    return <span title="TLS-encrypted link to the Brain">WSS · TLS</span>;
+  }
+  return (
+    <span title={brain.secure ? 'Plaintext on loopback only — safe for same-machine development' : 'Plaintext link (development only) — not secure'}>
+      WS{brain.secure ? ' · loopback' : ' · plaintext'} ⚠
+    </span>
+  );
+}
+
 function Row({ k, v, mono = false }: { k: string; v: React.ReactNode; mono?: boolean }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, padding: '6px 0', borderBottom: '1px solid var(--border-subtle)' }}>
@@ -144,7 +165,10 @@ export function BrainPage() {
       if (url) localStorage.setItem('blaxin-brain-url', url);
       setPairCode('');
       setGeneratedCode(null);
-      setNotice({ kind: 'ok', text: pairCode ? '✓ Pairing accepted — secure connection established.' : '✓ Connected to Brain.' });
+      // Connecting is asynchronous — the status card above reflects the
+      // real link state (CONNECTING → CONNECTED, or an honest error if
+      // the code is wrong/expired). No premature "success" claim.
+      setNotice({ kind: 'ok', text: pairCode ? '✓ Pairing request sent — the status card will flip to ONLINE once the secure link is established.' : '✓ Connect request sent.' });
     });
 
   const loadDevices = async () => {
@@ -273,13 +297,7 @@ export function BrainPage() {
           {external && brain?.brainId && <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>{brain.brainId}</span>}
           {external && brain?.protocol ? <span style={{ marginLeft: 8 }}>protocol v{brain.protocol}</span> : null}
           {external && brain?.transport && (
-            <span
-              style={{ marginLeft: 8 }}
-              title={brain.secure ? 'TLS encrypted link' : 'Plaintext (loopback/dev only)'}
-            >
-              {brain.transport.toUpperCase()}
-              {!brain.secure && ' ⚠'}
-            </span>
+            <span style={{ marginLeft: 8 }}>{transportBadge(brain)}</span>
           )}
           {!external && <span>Local orchestrator + providers act as the Brain in this process.</span>}
         </div>
@@ -320,7 +338,7 @@ export function BrainPage() {
             {external && <>
               <Row k="Brain ID" v={brain?.brainId || '—'} mono />
               <Row k="Protocol" v={brain?.protocol ? `v${brain.protocol}` : '—'} mono />
-              <Row k="Transport" v={brain?.url ? `${brain.transport?.toUpperCase()}${brain.secure ? ' · TLS' : ' · plaintext (dev)'}` : '—'} mono />
+              <Row k="Transport" v={transportHuman(brain)} mono />
               <Row k="Connected at" v={fmtTime(brain?.connectedAt)} />
             </>}
           </div>

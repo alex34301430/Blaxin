@@ -54,6 +54,10 @@ export interface RemoteBrainOptions {
    * Never enabled by default (see BLAXIN_BRAIN_ALLOW_INSECURE). */
   allowInsecure?: boolean;
   now?: () => number;
+  /** Heartbeat cadence overrides (tests / tuned deployments). Defaults to
+   * the module constants; see BodyLinkOptions. */
+  heartbeatIntervalMs?: number;
+  heartbeatTimeoutMs?: number;
 }
 
 const CONFIRMATION_TIMEOUT_MS = 120_000;
@@ -108,6 +112,8 @@ export class RemoteBrainDriver {
       autoReconnect: options.autoReconnect ?? true,
       ca: options.ca,
       allowInsecure: options.allowInsecure,
+      heartbeatIntervalMs: options.heartbeatIntervalMs,
+      heartbeatTimeoutMs: options.heartbeatTimeoutMs,
       onStateChange: (state, detail) => this.onLinkState(state, detail),
       onOpen: () => this.onLinkOpen(),
       onMessage: (msg) => this.onLinkMessage(msg),

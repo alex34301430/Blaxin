@@ -582,16 +582,24 @@ wss.on('connection', (ws) => {
     logger.info('websocket', 'Client disconnected');
   });
 
-  // Send initial state
+  // Send initial state. The client mirrors this snapshot into its Brain
+  // panel, so the payload matches the REST /api/brain/status shape
+  // (mode + bodyId + the inner BrainLinkStatus object) — never the full
+  // driver status wrapper nested one level too deep.
+  const brain = getRemoteBrain();
   const connectedPayload: Record<string, unknown> = {
     state: orchestrator.getState(),
     activeProvider: providers.getActiveProvider(),
     activeModel: providers.getActiveModel(),
     description: orchestrator.getCurrentDescription(),
+    mode: BRAIN_MODE,
   };
-  if (isExternalMode()) {
-    connectedPayload.mode = 'external';
-    connectedPayload.brain = getRemoteBrain()?.status() ?? null;
+  if (isExternalMode() && brain) {
+    connectedPayload.bodyId = brain.status().bodyId;
+    connectedPayload.brain = brain.status().brain ?? null;
+  } else {
+    connectedPayload.bodyId = null;
+    connectedPayload.brain = null;
   }
   ws.send(JSON.stringify({
     event: 'connected',

@@ -50,6 +50,11 @@ export interface BodyLinkOptions {
    * default; every use is surfaced in state + logs. */
   allowInsecure?: boolean;
   now?: () => number;
+  /** Heartbeat cadence overrides (tests / tuned deployments). Defaults to
+   * the module constants; a peer that stays silent for `heartbeatTimeoutMs`
+   * is marked DEGRADED and dropped. */
+  heartbeatIntervalMs?: number;
+  heartbeatTimeoutMs?: number;
 }
 
 const BACKOFF_JITTER_RATIO = 0.25;
@@ -99,6 +104,8 @@ export class BodyLink {
   private readonly name: string;
   private readonly ca: string | undefined;
   private readonly allowInsecure: boolean;
+  private readonly heartbeatIntervalMs: number;
+  private readonly heartbeatTimeoutMs: number;
   private everOpened = false;
 
   constructor(private readonly options: BodyLinkOptions) {
@@ -110,6 +117,8 @@ export class BodyLink {
     this.ca = options.ca;
     this.allowInsecure = options.allowInsecure === true;
     this.now = options.now ?? Date.now;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS;
+    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? HEARTBEAT_TIMEOUT_MS;
     this.lastActivity = this.now();
   }
 
@@ -332,7 +341,7 @@ export class BodyLink {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.heartbeatTimer = setInterval(() => {
       const now = this.now();
-      if (now - this.lastActivity > HEARTBEAT_TIMEOUT_MS) {
+      if (now - this.lastActivity > this.heartbeatTimeoutMs) {
         logger.warn('link', 'Heartbeat timeout — no frames from Brain');
         this.setState('DEGRADED', { reason: 'heartbeat timeout' });
         this.terminate(CLOSE.POLICY, 'Heartbeat timeout');
@@ -341,7 +350,7 @@ export class BodyLink {
       if (this.isOpen()) {
         this.sendAs('ping', { at: now });
       }
-    }, HEARTBEAT_INTERVAL_MS);
+    }, this.heartbeatIntervalMs);
   }
 
   private terminate(code: number, reason: string): void {

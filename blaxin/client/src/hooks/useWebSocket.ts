@@ -60,15 +60,21 @@ export function useWebSocket() {
           const { event: eventType, data } = JSON.parse(event.data);
 
           switch (eventType) {
-            case 'connected':
+            case 'connected': {
               if (data.state) {
                 setAgentState(data.state);
                 setAgentDescription(data.description || null);
               }
               if (data.activeProvider) setActiveProvider(data.activeProvider);
               if (data.activeModel) setActiveModel(data.activeModel);
-              // External mode: the server includes the Brain link snapshot.
-              if (data.mode || data.brain !== undefined) {
+              // A fresh server session means the previous session's error
+              // (if any) is stale — drop it so it cannot resurface later.
+              setLastError(null);
+              // The server includes the authoritative Brain snapshot
+              // (mode + bodyId + link status) in the connected payload for
+              // BOTH modes, so the badge never shows stale/contradictory
+              // state across a reconnect.
+              if (data.mode) {
                 useAppStore.getState().setBrainStatus({
                   mode: data.mode === 'external' ? 'external' : 'embedded',
                   bodyId: data.bodyId ?? null,
@@ -76,14 +82,16 @@ export function useWebSocket() {
                 });
               }
               break;
+            }
 
             case 'brain-status': {
               // Push update for the Brain link state (state changes are
               // authoritative server-side; the server may also include
               // phase/brainId/lastError). Merge into the current snapshot.
+              // Only external mode emits these, so a push means EXTERNAL.
               const cur = useAppStore.getState().brainStatus;
               const merged: BrainStatusResponse = {
-                mode: cur?.mode ?? 'embedded',
+                mode: 'external',
                 bodyId: cur?.bodyId ?? null,
                 brain: { ...(cur?.brain ?? {}), ...(data ?? {}) },
                 capabilities: cur?.capabilities,

@@ -31,17 +31,33 @@ export function StatusBar({ onStop, onClear }: { onStop: () => void; onClear: ()
 
   const showActivity = agentState !== 'idle' && agentState !== 'completed' && agentState !== 'error';
 
-  // Brain badge — mirror of the authoritative server status. ONLINE only
-  // when the Body has a live CONNECTED link to an external Brain; local
-  // (embedded) mode is labelled as such; clicking opens the Brain page.
+  // Brain badge — mirror of the authoritative server status. Every link
+  // state the server reports is shown with its own truthful color: green
+  // only for CONNECTED, yellow for transient link states (connecting /
+  // reconnecting / degraded), red for terminal failures (revoked /
+  // incompatible / error). Local (embedded) mode is labelled as such;
+  // clicking opens the Brain page.
   const brainExternal = brainStatus?.mode === 'external';
-  const brainConnected = brainExternal && brainStatus?.brain?.state === 'CONNECTED';
-  const brainState = brainStatus?.brain?.state ?? null;
-  const brainChip = brainStatus === null ? null : {
-    color: brainConnected ? 'var(--accent-green)' : brainExternal ? 'var(--accent-red)' : 'var(--text-muted)',
-    label: brainConnected ? 'BRAIN ONLINE' : brainExternal ? 'BRAIN OFFLINE' : 'BRAIN LOCAL',
-    detail: brainExternal ? (brainState ?? 'DISCONNECTED') : 'embedded',
+  const brainLink = brainStatus?.brain ?? null;
+  const brainState = brainLink?.state ?? null;
+  const chipStyle: Record<string, { color: string; label: string }> = {
+    CONNECTED: { color: 'var(--accent-green)', label: 'BRAIN ONLINE' },
+    CONNECTING: { color: 'var(--accent-yellow)', label: 'BRAIN CONNECTING' },
+    AUTHENTICATING: { color: 'var(--accent-yellow)', label: 'BRAIN AUTHENTICATING' },
+    RECONNECTING: { color: 'var(--accent-yellow)', label: 'BRAIN RECONNECTING' },
+    DEGRADED: { color: 'var(--accent-yellow)', label: 'BRAIN DEGRADED' },
+    REVOKED: { color: 'var(--accent-red)', label: 'BRAIN REVOKED' },
+    INCOMPATIBLE: { color: 'var(--accent-red)', label: 'BRAIN INCOMPATIBLE' },
+    ERROR: { color: 'var(--accent-red)', label: 'BRAIN ERROR' },
+    DISCONNECTED: { color: 'var(--text-muted)', label: 'BRAIN OFFLINE' },
   };
+  const chip = brainState ? (chipStyle[brainState] ?? { color: 'var(--accent-red)', label: `BRAIN ${brainState.toUpperCase()}` }) : null;
+  const brainChip = brainStatus === null ? null : brainExternal
+    ? (chip ?? { color: 'var(--text-muted)', label: 'BRAIN OFFLINE' })
+    : { color: 'var(--text-muted)', label: 'BRAIN LOCAL' };
+  const brainChipTitle = brainExternal
+    ? `${brainState ?? 'DISCONNECTED'}${brainLink?.lastError ? ` — ${brainLink.lastError}` : ''} — open Brain panel`
+    : 'Embedded (local) Brain — open Brain panel';
 
   return (
     <div style={{
@@ -107,7 +123,7 @@ export function StatusBar({ onStop, onClear }: { onStop: () => void; onClear: ()
         <>
           <button
             onClick={() => setCurrentPage('brain')}
-            title={`Brain: ${brainChip.detail} — open Brain panel`}
+            title={brainChipTitle}
             style={{
               display: 'flex', alignItems: 'center', gap: 5,
               background: 'transparent', border: 'none', cursor: 'pointer', padding: 0,
