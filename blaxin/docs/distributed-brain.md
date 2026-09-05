@@ -294,10 +294,17 @@ path when configured.
   — never a silent downgrade, never an endless reconnect loop.
 - Brain HTTP surface: `GET /health`, `/version`, `/protocol`,
   `/capabilities`, `/pairing`, `POST /pairing/start`, `/pairing/cancel`,
-  `GET /devices`, `POST /devices/:id/revoke`, `DELETE /devices/:id`,
+  `GET /devices`, `GET /devices/:id`, `GET /registry/status`,
+  `POST /devices/:id/revoke`, `DELETE /devices/:id`,
   `GET /ai/status`, `POST /ai/select` (present when an AI control-plane
   handle is attached). Admin endpoints default to loopback-only; they
   are served over the same TLS channel when WSS is enabled.
+- **Registry realtime channel** `GET /ws/admin` (same origin policy as
+  `/ws/brain`): on connect the Brain sends an authoritative `snapshot`;
+  afterwards it pushes only meaningful registry changes — `body-added`,
+  `body-updated`, `body-status`, `body-capabilities-updated`,
+  `body-revoked`, `body-removed`. Heartbeats are sparse JSON pings; no
+  per-heartbeat event spam.
 - Provider/API keys live on the Brain device only and never enter the
   protocol. GitHub credentials are never part of pairing, the protocol,
   telemetry or logs.
@@ -329,6 +336,63 @@ path when configured.
   path is exercised by `wss-transport.test.ts` (in-process, real TLS)
   and `wss-e2e.test.ts` (two real processes over the machine's LAN
   address).
+
+## Multi-Body Registry (B4)
+
+The Brain keeps the **authoritative device registry** (one Brain → many
+Bodies) and every management surface — the Desktop Brain Page today, a
+future Web Console tomorrow — consumes the *same* Brain API and
+realtime boundary. There is never a second registry on the UI side.
+
+### Registry data & persistence
+
+- Per Body: `bodyId`, `name`, public key (identity exchange), capability
+  set, protocol range, connection status, `lastSeen`, `pairedAt`,
+  `revokedAt`. **No private keys, pairing secrets or credentials ever
+  enter the registry or the wire shape** (`toPublicBody` exposes public
+  metadata only).
+- Persisted atomically (tmp + rename) under the Brain data dir; a
+  corrupt or partially-written file starts the registry empty (warned,
+  never crashed). Duplicate body ids collapse to a single record.
+- A **monotonic registry version** is incremented on every mutation and
+  persisted with the records. Snapshots and events both carry it.
+
+### Realtime synchronization
+
+```
+UI opens → GET /devices (authoritative snapshot + version)
+        → GET /ws/admin (realtime events)
+        → apply events only when event.version > last seen version
+reconnect → GET /devices snapshot → reconcile → resume events
+```
+
+The version guard is the ordering rule: a stale event (older than the
+last applied snapshot/event) can never overwrite newer state. The client
+implementation lives in `client/src/utils/registry-sync.ts` and is
+tested deterministically. The Brain never emits an event older than the
+snapshot a reconnecting client receives — the registry is the single
+source of truth.
+
+### Routing & targeting safety
+
+- Tasks are owned by the Body that starts them; `task_action` frames go
+  only to that Body's connection and `action_result` frames are only
+  accepted from the Body that owns the pending action (a forged result
+  from another Body is dropped).
+- The Brain pre-checks the selected Body's advertised capabilities
+  before any frame leaves it (the Body's own capability/policy gate
+  remains authoritative).
+- A task whose Body drops mid-run fails honestly with `CONNECTION_LOST`
+  — it is never silently rerouted to another Body.
+- A second live connection for the same body id replaces the first
+  without flipping the registry offline; the registry keeps one record.
+
+### Revocation
+
+Revocation is unchanged and terminal: a revoked Body stays revoked in
+the registry, rejects authenticated traffic, cannot re-pair as trusted,
+and renders as REVOKED in the management UI. The realtime channel pushes
+`body-revoked` and every subsequent snapshot reflects it.
 
 ## Running the tests
 
@@ -377,8 +441,22 @@ a result.
 
 ## Roadmap (not yet implemented)
 
-Multi-body UI, model router, Brain-owned memory store, LAN discovery,
-QR pairing, relay transport, coordinated signed releases and update
-compatibility are future phases — the backend architecture (one Brain →
-many Bodies, persistent device registry, protocol negotiation,
-revocation) already supports them.
+Model router, Brain-owned memory store, LAN discovery, QR pairing,
+relay transport, coordinated signed releases and update compatibility
+are future phases — the backend architecture (one Brain → many Bodies,
+persistent device registry, protocol negotiation, revocation) already
+supports them. State sync + task recovery (B5) is the next phase and can
+build on the versioned registry and per-Body task sessions.
+
+### Multi-body test files
+
+- `src/__tests__/distributed/multi-body-registry.test.ts` — two Bodies
+  against one in-process Brain: routing isolation, capability
+  pre-check, cross-body result integrity, duplicate identity,
+  disconnect/reconnect, revocation, realtime events with monotonic
+  versions, REST snapshot recovery (real sockets).
+- `src/__tests__/distributed/multi-body-e2e.test.ts` — one Brain + two
+  real Body processes: pairing, per-Body tasks, admin realtime events,
+  revoking one Body without affecting the other.
+- `registry-sync.test.ts` (server root) — the client's version-guarded
+  reconcile/apply module, exercised from the server suite.

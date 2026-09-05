@@ -29,7 +29,7 @@ import { APP_VERSION } from '../utils/version.js';
 import {
   ActionResult, CapabilitySet, ConnectionState, DeviceId, DeviceRole,
   DEVICE_ROLE_BODY, PROTOCOL_MAX_SUPPORTED, PROTOCOL_MIN_SUPPORTED,
-  PROTOCOL_VERSION, TaskActionRequest, TaskUpdatePayload, WireMessage,
+  PROTOCOL_VERSION, RegisteredBody, TaskActionRequest, TaskUpdatePayload, WireMessage,
 } from './types.js';
 import { createMessage, negotiateProtocol, parseFrame, sanitizeCapabilities, validateWireMessage, ReplayGuard, clampInt } from './protocol.js';
 import { DeviceIdentity, loadOrCreateIdentity, randomChallenge, verifySignature, signData } from './identity.js';
@@ -93,9 +93,29 @@ const PRE_AUTH_MAX_FRAMES = 60;
 const CONNECTION_ATTEMPT_WINDOW_MS = 60_000;
 const CONNECTION_ATTEMPT_LIMIT = 25;
 
+// Registry realtime channel (management UI / future Web Console).
+const ADMIN_HEARTBEAT_MS = 30_000;
+const ADMIN_STALE_MS = 90_000;
+
+/**
+ * Realtime registry events pushed to management surfaces (the Desktop
+ * Brain Page today, a future Web Console tomorrow). Every event carries
+ * the registry version at the moment of the mutation; a snapshot is
+ * authoritative and any event with a version ≤ the last applied
+ * snapshot/event is stale and must be ignored by the consumer.
+ */
+export type RegistryEventType =
+  | 'body-added'
+  | 'body-updated'
+  | 'body-status'
+  | 'body-revoked'
+  | 'body-removed'
+  | 'body-capabilities-updated';
+
 interface PendingAction {
   taskId: string;
   actionId: string;
+  bodyId: DeviceId;
   resolve: (r: ActionResult) => void;
 }
 
@@ -148,6 +168,11 @@ export class BrainRuntime {
   private wss: WebSocketServer | null = null;
   private expressApp: express.Express | null = null;
   private peers = new Map<DeviceId, PeerState>();
+  /** Management-surface registry subscribers (admin WebSocket clients). */
+  private readonly registryClients = new Map<WebSocket, {
+    lastActivity: number;
+    timer: ReturnType<typeof setInterval> | null;
+  }>();
   private readonly pendingActions = new Map<string, PendingAction>();
   private readonly activeTasks = new Map<DeviceId, TaskSession>();
   private readonly replay = new ReplayGuard();
@@ -243,22 +268,48 @@ export class BrainRuntime {
       res.json({ success: true });
     });
 
+    // Authoritative registry snapshot (with the monotonic version so the
+    // UI can order it against realtime events).
     app.get('/devices', (req, res) => {
       if (!this.allowAdminRequest(req)) {
         return res.status(403).json({ error: 'Forbidden', code: 'ADMIN_RESTRICTED' });
       }
       const online = new Set(this.peers.keys());
       res.json({
-        devices: this.registry.list().map((d) => ({
-          bodyId: d.bodyId,
-          name: d.name,
-          capabilities: d.capabilities,
-          protocol: { min: d.protocolMin, max: d.protocolMax },
-          status: online.has(d.bodyId) ? 'online' : d.status,
-          lastSeen: d.lastSeen,
-          pairedAt: d.pairedAt,
-          revokedAt: d.revokedAt,
-        })),
+        version: this.registry.getVersion(),
+        devices: this.registry.list().map((d) => this.toPublicBody(d, online)),
+      });
+    });
+
+    // Single Body details (for the management UI's selected-Body panel).
+    app.get('/devices/:id', (req, res) => {
+      if (!this.allowAdminRequest(req)) {
+        return res.status(403).json({ error: 'Forbidden', code: 'ADMIN_RESTRICTED' });
+      }
+      const bodyId = String(req.params.id || '').toUpperCase();
+      const record = this.registry.get(bodyId);
+      if (!record) return res.status(404).json({ error: 'Unknown device', code: 'NOT_FOUND' });
+      const online = new Set(this.peers.keys());
+      res.json({
+        version: this.registry.getVersion(),
+        body: this.toPublicBody(record, online),
+      });
+    });
+
+    // Lightweight registry status summary (counts + version).
+    app.get('/registry/status', (req, res) => {
+      if (!this.allowAdminRequest(req)) {
+        return res.status(403).json({ error: 'Forbidden', code: 'ADMIN_RESTRICTED' });
+      }
+      const list = this.registry.list();
+      const online = new Set(this.peers.keys());
+      const live = list.filter((d) => d.status !== 'revoked' && online.has(d.bodyId)).length;
+      res.json({
+        version: this.registry.getVersion(),
+        total: list.length,
+        online: live,
+        offline: list.filter((d) => !online.has(d.bodyId) && d.status !== 'revoked').length,
+        revoked: list.filter((d) => d.status === 'revoked').length,
       });
     });
 
@@ -267,9 +318,9 @@ export class BrainRuntime {
         return res.status(403).json({ error: 'Forbidden', code: 'ADMIN_RESTRICTED' });
       }
       const bodyId = String(req.params.id || '').toUpperCase();
-      const revoked = this.registry.markRevoked(bodyId);
-      if (!revoked) return res.status(404).json({ error: 'Unknown device', code: 'NOT_FOUND' });
-      this.disconnectBody(bodyId, CLOSE.REVOKED, 'Device revoked');
+      if (!this.markBodyRevoked(bodyId)) {
+        return res.status(404).json({ error: 'Unknown device', code: 'NOT_FOUND' });
+      }
       logger.warn('brain', `Device revoked: ${bodyId}`);
       res.json({ success: true, bodyId });
     });
@@ -279,9 +330,9 @@ export class BrainRuntime {
         return res.status(403).json({ error: 'Forbidden', code: 'ADMIN_RESTRICTED' });
       }
       const bodyId = String(req.params.id || '').toUpperCase();
-      const removed = this.registry.remove(bodyId);
-      if (!removed) return res.status(404).json({ error: 'Unknown device', code: 'NOT_FOUND' });
-      this.disconnectBody(bodyId, CLOSE.POLICY, 'Device removed');
+      if (!this.removeBody(bodyId)) {
+        return res.status(404).json({ error: 'Unknown device', code: 'NOT_FOUND' });
+      }
       res.json({ success: true, bodyId });
     });
 
@@ -404,7 +455,7 @@ export class BrainRuntime {
         socket.destroy();
         return;
       }
-      if (pathname !== '/ws/brain') {
+      if (pathname !== '/ws/brain' && pathname !== '/ws/admin') {
         socket.destroy();
         return;
       }
@@ -427,7 +478,17 @@ export class BrainRuntime {
       });
     });
 
-    wss.on('connection', (ws: WebSocket) => {
+    wss.on('connection', (ws: WebSocket, request) => {
+      let pathname = '';
+      try {
+        pathname = new URL(request?.url || '/', 'http://localhost').pathname;
+      } catch {
+        pathname = '';
+      }
+      if (pathname === '/ws/admin') {
+        this.handleAdminConnection(ws);
+        return;
+      }
       this.handleConnection(ws);
     });
 
@@ -451,6 +512,11 @@ export class BrainRuntime {
       this.teardownPeer(peer, CLOSE.GOING_AWAY, 'Brain shutting down');
     }
     this.peers.clear();
+    for (const [ws, entry] of this.registryClients) {
+      if (entry.timer) clearInterval(entry.timer);
+      try { ws.terminate(); } catch { /* ignore */ }
+    }
+    this.registryClients.clear();
     if (this.wss) this.wss.close();
     if (this.httpServer) {
       await new Promise<void>((resolve) => {
@@ -475,9 +541,16 @@ export class BrainRuntime {
   }
 
   revokeBody(bodyId: string): boolean {
-    const ok = this.registry.markRevoked(bodyId.toUpperCase());
-    if (ok) this.disconnectBody(bodyId.toUpperCase(), CLOSE.REVOKED, 'Device revoked');
-    return ok;
+    return this.markBodyRevoked(bodyId.toUpperCase());
+  }
+
+  /** Forget a device entirely (disconnect + notify subscribers). */
+  removeBody(bodyId: string): boolean {
+    const id = bodyId.toUpperCase();
+    if (!this.registry.remove(id)) return false;
+    this.disconnectBody(id, CLOSE.POLICY, 'Device removed');
+    this.emitRegistryEvent('body-removed', id);
+    return true;
   }
 
   listDevices(): ReturnType<DeviceRegistry['list']> {
@@ -486,6 +559,108 @@ export class BrainRuntime {
 
   isBodyConnected(bodyId: DeviceId): boolean {
     return this.peers.get(bodyId)?.connectionState === 'CONNECTED';
+  }
+
+  // ── Registry realtime channel (management surfaces) ──────────
+
+  /** The public (secret-free) wire shape of a registry record, used by
+   * REST snapshots and realtime events alike. Never includes keys,
+   * session ids, task bookkeeping or credentials. */
+  private toPublicBody(record: RegisteredBody, online: Set<DeviceId>): Record<string, unknown> {
+    // Revoked is terminal and must always render as revoked — a socket
+    // that is still tearing down after a revocation must never make a
+    // revoked Body look online.
+    const status = record.status === 'revoked'
+      ? 'revoked'
+      : online.has(record.bodyId) ? 'online' : record.status;
+    return {
+      bodyId: record.bodyId,
+      name: record.name,
+      capabilities: record.capabilities,
+      protocol: { min: record.protocolMin, max: record.protocolMax },
+      status,
+      lastSeen: record.lastSeen,
+      pairedAt: record.pairedAt,
+      revokedAt: record.revokedAt,
+    };
+  }
+
+  private handleAdminConnection(ws: WebSocket): void {
+    const entry = { lastActivity: this.now(), timer: null as ReturnType<typeof setInterval> | null };
+    this.registryClients.set(ws, entry);
+
+    // Authoritative snapshot on connect (the client reconciles against it;
+    // the Brain registry remains the single source of truth).
+    const online = new Set(this.peers.keys());
+    this.sendRegistryFrame(ws, {
+      type: 'snapshot',
+      version: this.registry.getVersion(),
+      bodies: this.registry.list().map((d) => this.toPublicBody(d, online)),
+    });
+
+    ws.on('message', () => {
+      entry.lastActivity = this.now();
+    });
+    ws.on('close', () => {
+      if (entry.timer) clearInterval(entry.timer);
+      this.registryClients.delete(ws);
+    });
+    ws.on('error', () => {
+      if (entry.timer) clearInterval(entry.timer);
+      this.registryClients.delete(ws);
+    });
+
+    // JSON heartbeat: only meaningful registry changes are pushed, so a
+    // quiet but alive connection is kept warm without event spam.
+    entry.timer = setInterval(() => {
+      if (this.now() - entry.lastActivity > ADMIN_STALE_MS) {
+        try { ws.terminate(); } catch { /* ignore */ }
+        return;
+      }
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping', at: this.now() }));
+        }
+      } catch { /* ignore */ }
+    }, ADMIN_HEARTBEAT_MS);
+  }
+
+  /** Broadcast one registry event to every connected management surface. */
+  private emitRegistryEvent(type: RegistryEventType, bodyId: DeviceId): void {
+    const payload: Record<string, unknown> = {
+      type,
+      version: this.registry.getVersion(),
+      bodyId,
+    };
+    if (type !== 'body-removed') {
+      const record = this.registry.get(bodyId);
+      if (record) {
+        const online = new Set(this.peers.keys());
+        payload.body = this.toPublicBody(record, online);
+      }
+    }
+    for (const ws of this.registryClients.keys()) {
+      this.sendRegistryFrame(ws, payload);
+    }
+  }
+
+  private sendRegistryFrame(ws: WebSocket, payload: Record<string, unknown>): void {
+    try {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(payload));
+      }
+    } catch (error: any) {
+      logger.error('brain', `Failed to send registry event: ${error.message}`);
+    }
+  }
+
+  /** Revoke + disconnect + notify subscribers (single path, never split). */
+  private markBodyRevoked(bodyId: DeviceId): boolean {
+    const ok = this.registry.markRevoked(bodyId);
+    if (!ok) return false;
+    this.disconnectBody(bodyId, CLOSE.REVOKED, 'Device revoked');
+    this.emitRegistryEvent('body-revoked', bodyId);
+    return true;
   }
 
   // ── Connection handling ───────────────────────────────────────
@@ -702,6 +877,7 @@ export class BrainRuntime {
       protocolMin: PROTOCOL_MIN_SUPPORTED,
       protocolMax: PROTOCOL_MAX_SUPPORTED,
     });
+    this.emitRegistryEvent('body-added', bodyId);
     logger.info('brain', `Body paired: ${bodyId} (${name})`);
 
     this.send(peer, createMessage('brain', this.identity.id, 'pair_accept', {
@@ -787,8 +963,17 @@ export class BrainRuntime {
     if (!peer.bodyId) return;
     peer.phase = 'ready';
     peer.connectionState = 'CONNECTED';
-    this.registry.markOnline(peer.bodyId, peer.sessionId);
+    // A second live connection for the same body (reconnect race) replaces
+    // the first. The replaced socket must NOT mark the body offline or
+    // abort the new session's actions when its close event lands later.
+    const previous = this.peers.get(peer.bodyId);
+    if (previous && previous !== peer) {
+      logger.warn('brain', `Body ${peer.bodyId} reconnected — replacing the previous connection`);
+      this.teardownPeer(previous, CLOSE.GOING_AWAY, 'Replaced by a new connection for this Body');
+    }
     this.peers.set(peer.bodyId, peer);
+    this.registry.markOnline(peer.bodyId, peer.sessionId);
+    this.emitRegistryEvent('body-status', peer.bodyId);
     this.clearPhaseTimer(peer);
     this.startHeartbeat(peer);
 
@@ -874,6 +1059,7 @@ export class BrainRuntime {
         protocolMax: record.protocolMax,
       });
     }
+    this.emitRegistryEvent('body-capabilities-updated', peer.bodyId as DeviceId);
     this.send(peer, createMessage('brain', this.identity.id, 'ack', {
       what: 'capabilities',
       capabilities: caps,
@@ -1019,6 +1205,22 @@ export class BrainRuntime {
     req: TaskActionRequest,
   ): Promise<ActionResult> {
     const bodyId = peer.bodyId as DeviceId;
+    // Brain-side capability safety layer: a body that never advertised the
+    // capability is refused here, before any frame leaves the Brain. The
+    // Body's own capability/policy check remains authoritative.
+    if (!toolAllowedByCapabilities(peer.capabilities, req.action.tool)) {
+      logger.warn('brain', `Refusing to route ${req.action.tool} to body ${bodyId} — capability not advertised`);
+      return Promise.resolve({
+        taskId: req.taskId,
+        actionId: req.actionId,
+        requestId: req.requestId,
+        outcome: 'rejected',
+        executed: false,
+        replay: false,
+        success: false,
+        error: `UNSUPPORTED_CAPABILITY: body ${bodyId} does not advertise the ${req.action.tool} capability`,
+      });
+    }
     const live = this.peers.get(bodyId);
     if (!live || live.ws.readyState !== WebSocket.OPEN) {
       return Promise.resolve({
@@ -1034,7 +1236,12 @@ export class BrainRuntime {
     }
 
     return new Promise<ActionResult>((resolve) => {
-      this.pendingActions.set(req.actionId, { taskId: session.taskId, actionId: req.actionId, resolve });
+      this.pendingActions.set(req.actionId, {
+        taskId: session.taskId,
+        actionId: req.actionId,
+        bodyId,
+        resolve,
+      });
       const payload = {
         taskId: req.taskId,
         actionId: req.actionId,
@@ -1056,6 +1263,13 @@ export class BrainRuntime {
       // Stale/duplicate result (already resolved, or unknown) — ignore
       // safely rather than double-driving a task.
       logger.warn('brain', `Ignoring stale action_result for ${actionId || '(missing id)'}`);
+      return;
+    }
+    // Multi-body integrity: an action belongs to exactly one Body. A
+    // result arriving from any other connection is dropped — Body B can
+    // never satisfy (or poison) Body A's pending action.
+    if (pending.bodyId !== (peer.bodyId as DeviceId)) {
+      logger.warn('brain', `Ignoring action_result for ${actionId} from body ${peer.bodyId} — it belongs to body ${pending.bodyId}`);
       return;
     }
     this.pendingActions.delete(actionId);
@@ -1089,14 +1303,20 @@ export class BrainRuntime {
     }
     const bodyId = peer.bodyId;
     this.teardownPeer(peer, CLOSE.GOING_AWAY, reason);
-    if (this.peers.get(bodyId) === peer) {
-      this.peers.delete(bodyId);
-    }
+    // A replaced connection (duplicate body id) or a stale socket must not
+    // flip the registry offline or abort the live session's actions.
+    if (this.peers.get(bodyId) !== peer) return;
+    this.peers.delete(bodyId);
     this.registry.markOffline(bodyId);
+    // A revocation already pushed the terminal body-revoked event; the
+    // disconnect that follows is a consequence, not a new state.
+    if (!this.registry.isRevoked(bodyId)) {
+      this.emitRegistryEvent('body-status', bodyId);
+    }
     // Abort any in-flight action: the driver resolves and fails the task
     // honestly (no action is ever blindly replayed after reconnect).
     for (const [actionId, pending] of this.pendingActions) {
-      if (pending.taskId === this.activeTasks.get(bodyId)?.taskId) {
+      if (pending.bodyId === bodyId && pending.taskId === this.activeTasks.get(bodyId)?.taskId) {
         this.pendingActions.delete(actionId);
         pending.resolve({
           taskId: pending.taskId,

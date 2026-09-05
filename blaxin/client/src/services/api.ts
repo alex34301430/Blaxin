@@ -121,6 +121,19 @@ export interface BrainDevice {
   protocol?: { min: number; max: number };
 }
 
+export interface BrainRegistrySnapshot {
+  version: number;
+  devices: BrainDevice[];
+}
+
+export interface BrainRegistryStatus {
+  version: number;
+  total: number;
+  online: number;
+  offline: number;
+  revoked: number;
+}
+
 export interface BrainPairingCode {
   brainId: string;
   code: string;
@@ -246,12 +259,28 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
  * operator to allow the origin; same-machine/desktop Brains are allowed
  * by default. The Body API never proxies these (Bodies are not
  * privileged over other Bodies). */
+/** Convert an admin base URL (http/https) to its WebSocket URL for the
+ * registry realtime channel (the Brain serves both on the same port). */
+export function registryWsUrl(base: string): string {
+  const trimmed = trimBase(base);
+  return `${trimmed.replace(/^http/, 'ws')}/ws/admin`;
+}
+
 export const brainAdmin = {
   startPairing: (base: string) =>
     fetchUrl<BrainPairingCode>(`${trimBase(base)}/pairing/start`, { method: 'POST', body: '{}' }),
 
+  /** Authoritative registry snapshot (with the monotonic version). */
   listDevices: (base: string) =>
-    fetchUrl<{ devices: BrainDevice[] }>(`${trimBase(base)}/devices`),
+    fetchUrl<BrainRegistrySnapshot>(`${trimBase(base)}/devices`),
+
+  /** Single Body details (selected-Body panel). */
+  getDevice: (base: string, bodyId: string) =>
+    fetchUrl<{ version: number; body: BrainDevice }>(`${trimBase(base)}/devices/${encodeURIComponent(bodyId)}`),
+
+  /** Lightweight registry status summary. */
+  registryStatus: (base: string) =>
+    fetchUrl<BrainRegistryStatus>(`${trimBase(base)}/registry/status`),
 
   revokeDevice: (base: string, bodyId: string) =>
     fetchUrl<{ success: boolean; bodyId: string }>(`${trimBase(base)}/devices/${encodeURIComponent(bodyId)}/revoke`, { method: 'POST', body: '{}' }),

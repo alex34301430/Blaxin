@@ -102,4 +102,84 @@ describe('device registry', () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('bumps a monotonic version on every mutation and persists it', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'blaxin-reg-'));
+    try {
+      const reg = makeRegistry(dir);
+      const v0 = reg.getVersion();
+      reg.registerPair('BLX-BODY-8F2A', bodyInfo);
+      const v1 = reg.getVersion();
+      expect(v1).toBeGreaterThan(v0);
+      reg.markOffline('BLX-BODY-8F2A');
+      const v2 = reg.getVersion();
+      expect(v2).toBeGreaterThan(v1);
+      reg.markOnline('BLX-BODY-8F2A', 'sess');
+      const v3 = reg.getVersion();
+      expect(v3).toBeGreaterThan(v2);
+      reg.markRevoked('BLX-BODY-8F2A');
+      const v4 = reg.getVersion();
+      expect(v4).toBeGreaterThan(v3);
+
+      // Version survives a reload (persisted with the records).
+      const reloaded = makeRegistry(dir);
+      expect(reloaded.getVersion()).toBe(v4);
+      expect(reloaded.isRevoked('BLX-BODY-8F2A')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('does not bump the version for task bookkeeping (no heartbeat noise)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'blaxin-reg-'));
+    try {
+      const reg = makeRegistry(dir);
+      reg.registerPair('BLX-BODY-8F2A', bodyInfo);
+      const v = reg.getVersion();
+      reg.updateActivity('BLX-BODY-8F2A', { activeTaskId: 'task-1', lastAckedActionId: 'act-1' });
+      expect(reg.getVersion()).toBe(v);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads the legacy bare-array format and the versioned format', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'blaxin-reg-'));
+    try {
+      // Legacy (Phase A) format: bare array — loads with version 0.
+      writeFileSync(join(dir, 'legacy.json'), JSON.stringify([
+        { bodyId: 'BLX-BODY-1234', name: 'Legacy', publicKey: 'x'.repeat(40), capabilities: [], protocolMin: 1, protocolMax: 1, status: 'offline', lastSeen: 1, pairedAt: 1 },
+      ]));
+      const legacy = new DeviceRegistry({ filePath: join(dir, 'legacy.json') });
+      expect(legacy.list()).toHaveLength(1);
+      expect(legacy.getVersion()).toBe(0);
+
+      // Current format: { version, devices }.
+      writeFileSync(join(dir, 'current.json'), JSON.stringify({
+        version: 7,
+        devices: [
+          { bodyId: 'BLX-BODY-5678', name: 'Current', publicKey: 'y'.repeat(40), capabilities: ['terminal'], protocolMin: 1, protocolMax: 1, status: 'revoked', lastSeen: 2, pairedAt: 2, revokedAt: 3 },
+        ],
+      }));
+      const current = new DeviceRegistry({ filePath: join(dir, 'current.json') });
+      expect(current.getVersion()).toBe(7);
+      expect(current.isRevoked('BLX-BODY-5678')).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('registering the same body id twice keeps a single record (no duplicates)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'blaxin-reg-'));
+    try {
+      const reg = makeRegistry(dir);
+      reg.registerPair('BLX-BODY-8F2A', bodyInfo);
+      reg.registerPair('BLX-BODY-8F2A', { ...bodyInfo, name: 'Renamed Body' });
+      expect(reg.list()).toHaveLength(1);
+      expect(reg.get('BLX-BODY-8F2A')?.name).toBe('Renamed Body');
+      expect(reg.get('BLX-BODY-8F2A')?.pairedAt).toBeGreaterThan(0);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

@@ -23,11 +23,24 @@ export class DeviceRegistry {
   private bodies = new Map<DeviceId, RegisteredBody>();
   private readonly filePath: string;
   private readonly now: () => number;
+  /**
+   * Monotonic registry version. Incremented on every mutation and
+   * persisted with the records, so management surfaces can order
+   * snapshots vs realtime events: a snapshot is authoritative, and an
+   * event with a version ≤ the last applied snapshot/event is stale and
+   * must be ignored.
+   */
+  private version = 0;
 
   constructor(options: DeviceRegistryOptions) {
     this.filePath = options.filePath;
     this.now = options.now ?? Date.now;
     this.load();
+  }
+
+  /** Current registry version (changes on every mutation). */
+  getVersion(): number {
+    return this.version;
   }
 
   /** Register (or refresh) a paired body after a successful pairing. */
@@ -55,6 +68,7 @@ export class DeviceRegistry {
       pairedAt: existing?.pairedAt ?? this.now(),
       sessionId: existing?.sessionId,
     });
+    this.bump();
     this.save();
   }
 
@@ -73,6 +87,7 @@ export class DeviceRegistry {
     b.status = 'online';
     b.lastSeen = this.now();
     b.sessionId = sessionId;
+    this.bump();
     this.save();
   }
 
@@ -84,12 +99,14 @@ export class DeviceRegistry {
     // (that would let it reconnect with its old credentials).
     if (b.status === 'revoked') {
       b.lastSeen = this.now();
+      this.bump();
       this.save();
       return;
     }
     b.status = 'offline';
     b.lastSeen = this.now();
     b.sessionId = undefined;
+    this.bump();
     this.save();
   }
 
@@ -99,6 +116,7 @@ export class DeviceRegistry {
     b.status = 'revoked';
     b.revokedAt = this.now();
     b.sessionId = undefined;
+    this.bump();
     this.save();
     return true;
   }
@@ -106,7 +124,10 @@ export class DeviceRegistry {
   /** Remove a device record entirely (forget/unpair). */
   remove(bodyId: DeviceId): boolean {
     const removed = this.bodies.delete(bodyId);
-    if (removed) this.save();
+    if (removed) {
+      this.bump();
+      this.save();
+    }
     return removed;
   }
 
@@ -114,7 +135,9 @@ export class DeviceRegistry {
     return this.bodies.get(bodyId)?.status === 'revoked';
   }
 
-  /** Track the active task / ack watermark for reconnect reconciliation. */
+  /** Track the active task / ack watermark for reconnect reconciliation.
+   * Task bookkeeping does NOT bump the registry version: the UI is only
+   * pushed meaningful registry changes, never per-heartbeat noise. */
   updateActivity(bodyId: DeviceId, fields: { activeTaskId?: string; lastAckedActionId?: string }): void {
     const b = this.bodies.get(bodyId);
     if (!b || b.status === 'revoked') return;
@@ -130,8 +153,17 @@ export class DeviceRegistry {
     try {
       if (!existsSync(this.filePath)) return;
       const parsed = JSON.parse(readFileSync(this.filePath, 'utf-8'));
-      if (!Array.isArray(parsed)) return;
-      for (const raw of parsed) {
+      // Current format: { version, devices }. Legacy format (Phase A): a
+      // bare array of records. Both load; nothing ever re-writes legacy.
+      const records: unknown[] = Array.isArray(parsed)
+        ? parsed
+        : Array.isArray(parsed.devices)
+          ? (parsed.devices as unknown[])
+          : [];
+      if (!Array.isArray(parsed)) {
+        this.version = typeof parsed.version === 'number' && Number.isInteger(parsed.version) ? parsed.version : 0;
+      }
+      for (const raw of records) {
         const r = raw as Partial<RegisteredBody>;
         if (
           typeof r.bodyId === 'string' && /^BLX-BODY-[A-Z0-9]{4,12}$/.test(r.bodyId) &&
@@ -161,11 +193,15 @@ export class DeviceRegistry {
     }
   }
 
+  private bump(): void {
+    this.version++;
+  }
+
   private save(): void {
     try {
       mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o700 });
       const tmp = join(dirname(this.filePath), `.devices.${process.pid}.${Date.now()}.tmp`);
-      writeFileSync(tmp, JSON.stringify(this.list(), null, 2), { mode: 0o600 });
+      writeFileSync(tmp, JSON.stringify({ version: this.version, devices: this.list() }, null, 2), { mode: 0o600 });
       renameSync(tmp, this.filePath);
     } catch (error: any) {
       logger.error('brain', `Failed to persist device registry: ${error.message}`);

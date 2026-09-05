@@ -1,12 +1,17 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../utils/store';
 import {
-  api, brainAdmin, adminBaseFromBrainUrl,
+  api, brainAdmin, adminBaseFromBrainUrl, registryWsUrl,
   type BrainDevice, type BrainLinkStatus,
 } from '../services/api';
 import {
+  applyRegistryEvent, emptyRegistryView, isRegistryEventType, reconcileSnapshot,
+  type RegistryBody, type RegistryEvent, type RegistryView,
+} from '../utils/registry-sync';
+import {
   FiCpu, FiRefreshCw, FiWifi, FiWifiOff, FiLink, FiKey, FiTrash2,
   FiAlertTriangle, FiX, FiLoader, FiServer, FiShield, FiClock,
+  FiCheckCircle,
 } from 'react-icons/fi';
 
 const STATE_META: Record<string, { color: string; label: string }> = {
@@ -51,6 +56,11 @@ const btnBase: React.CSSProperties = {
 function fmtTime(ts?: number | null): string {
   if (!ts) return '—';
   return new Date(ts).toLocaleTimeString();
+}
+
+function fmtDate(ts?: number | null): string {
+  if (!ts) return '—';
+  return new Date(ts).toLocaleString();
 }
 
 /** Honest transport wording: TLS is only claimed when the wire is actually
@@ -106,10 +116,20 @@ export function BrainPage() {
     const saved = localStorage.getItem('blaxin-brain-admin-base');
     return saved || 'http://127.0.0.1:3100';
   });
-  const [devices, setDevices] = useState<BrainDevice[] | null>(null);
+  // Authoritative registry mirror (Brain is the single source of truth).
+  // Bodies + monotonic version, kept in sync by REST snapshots and
+  // version-guarded realtime events (see utils/registry-sync.ts).
+  const [view, setView] = useState<RegistryView>(() => emptyRegistryView());
+  const [registryLoaded, setRegistryLoaded] = useState(false);
+  const [selectedBodyId, setSelectedBodyId] = useState<string>(() =>
+    localStorage.getItem('blaxin-brain-selected-body') || '',
+  );
   const [adminBusy, setAdminBusy] = useState<string | null>(null);
   const [adminError, setAdminError] = useState<string | null>(null);
+  const [adminOnline, setAdminOnline] = useState(false);
   const [revokeArmed, setRevokeArmed] = useState<string | null>(null);
+  const adminWsRef = useRef<WebSocket | null>(null);
+  const adminWsReconnectRef = useRef<ReturnType<typeof setTimeout>>();
 
   const refresh = useCallback(async () => {
     try {
@@ -171,7 +191,8 @@ export function BrainPage() {
       setNotice({ kind: 'ok', text: pairCode ? '✓ Pairing request sent — the status card will flip to ONLINE once the secure link is established.' : '✓ Connect request sent.' });
     });
 
-  const loadDevices = async () => {
+  /** Authoritative REST snapshot (also the reconnect/recovery path). */
+  const loadDevices = useCallback(async () => {
     const base = adminBase.trim();
     if (!/^https?:\/\//.test(base)) {
       setAdminError('Enter the Brain admin address (http://host:port — same machine as the Brain).');
@@ -181,14 +202,77 @@ export function BrainPage() {
     setAdminError(null);
     try {
       const res = await brainAdmin.listDevices(base);
-      setDevices(res.devices);
+      // Snapshot replaces local state and adopts the authoritative version
+      // (any realtime event older than it becomes stale and is dropped).
+      setView((cur) => reconcileSnapshot(cur, { type: 'snapshot', version: res.version, bodies: res.devices }));
+      setRegistryLoaded(true);
       localStorage.setItem('blaxin-brain-admin-base', base.replace(/\/+$/, ''));
     } catch (err: any) {
       setAdminError(`${err?.message || String(err)}\n\nThe Brain admin plane only answers requests its own security policy allows (loopback / desktop origin by default). For a remote Brain, run the console on the Brain machine or allow the origin in BLAXIN_ALLOWED_ORIGINS.`);
     } finally {
       setAdminBusy(null);
     }
-  };
+  }, [adminBase]);
+
+  // Realtime registry events from the Brain admin WebSocket. The UI is
+  // never authoritative: on (re)connect the snapshot reconciles local
+  // state first, then live events resume.
+  const connectAdminWs = useCallback((base: string) => {
+    if (adminWsRef.current?.readyState === WebSocket.OPEN) return;
+    let ws: WebSocket;
+    try {
+      ws = new WebSocket(registryWsUrl(base));
+    } catch {
+      return;
+    }
+    adminWsRef.current = ws;
+    ws.onopen = () => {
+      setAdminOnline(true);
+      // Reconcile from the authoritative snapshot right after (re)connect.
+      void loadDevices();
+    };
+    ws.onmessage = (event) => {
+      let msg: RegistryEvent;
+      try {
+        msg = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if (msg.type === 'ping') {
+        try { ws.send(JSON.stringify({ type: 'pong' })); } catch { /* ignore */ }
+        return;
+      }
+      if (!isRegistryEventType(String(msg.type || ''))) return;
+      if (msg.type === 'snapshot') {
+        setView((cur) => reconcileSnapshot(cur, msg));
+      } else {
+        // Version guard: stale events (older than the last snapshot/event)
+        // can never overwrite newer state.
+        setView((cur) => applyRegistryEvent(cur, msg));
+      }
+    };
+    ws.onclose = () => {
+      setAdminOnline(false);
+      if (adminWsRef.current === ws) adminWsRef.current = null;
+      // Reconnect with backoff; the next open re-fetches the snapshot.
+      adminWsReconnectRef.current = setTimeout(() => connectAdminWs(adminBase.trim()), 3000);
+    };
+    ws.onerror = () => { /* close follows and schedules the reconnect */ };
+  }, [adminBase, loadDevices]);
+
+  // Auto-load the registry + subscribe to realtime events whenever the
+  // admin base is known (saved previously or derived from the Brain URL).
+  useEffect(() => {
+    const base = adminBase.trim();
+    if (!/^https?:\/\//.test(base)) return;
+    void loadDevices();
+    connectAdminWs(base);
+    return () => {
+      clearTimeout(adminWsReconnectRef.current);
+      adminWsRef.current?.close();
+      adminWsRef.current = null;
+    };
+  }, [adminBase, loadDevices, connectAdminWs]);
 
   const generateCode = async () => {
     const base = adminBase.trim();
@@ -228,6 +312,8 @@ export function BrainPage() {
     try {
       await brainAdmin.revokeDevice(adminBase, d.bodyId);
       setRevokeArmed(null);
+      // The realtime event stream already carries the body-revoked event;
+      // the snapshot fetch is the authoritative recovery path.
       await loadDevices();
       await refresh(); // revoking THIS body changes the link state
       setNotice({ kind: 'ok', text: `Revoked ${d.name || d.bodyId}. A revoked device cannot reconnect.` });
@@ -236,6 +322,19 @@ export function BrainPage() {
     } finally {
       setAdminBusy(null);
     }
+  };
+
+  const selectBody = (d: BrainDevice) => {
+    setSelectedBodyId(d.bodyId);
+    localStorage.setItem('blaxin-brain-selected-body', d.bodyId);
+  };
+
+  const devices = registryLoaded || view.bodies.length > 0 ? view.bodies : null;
+  const selectedBody = devices?.find((d) => d.bodyId === selectedBodyId) ?? null;
+  const registrySummary = {
+    total: view.bodies.length,
+    online: view.bodies.filter((d) => d.status === 'online').length,
+    revoked: view.bodies.filter((d) => d.status === 'revoked').length,
   };
 
   // Stop polling while a revoke is in flight? Polling is cheap; keep it.
@@ -468,9 +567,15 @@ export function BrainPage() {
               )}
             </div>
 
-            {/* Device registry */}
+            {/* Device registry — authoritative mirror of the Brain's body
+                registry (REST snapshot + version-guarded realtime events) */}
             <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', padding: '0 16px 12px' }}>
-              <SectionTitle>Devices (Brain registry)</SectionTitle>
+              <SectionTitle title={`Devices — ${registrySummary.total} registered · ${registrySummary.online} online · ${registrySummary.revoked} revoked`}>
+                <span style={{ fontSize: 10, color: adminOnline ? 'var(--accent-green)' : 'var(--text-muted)', fontWeight: 400, letterSpacing: 0, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: adminOnline ? 'var(--accent-green)' : 'var(--text-muted)', display: 'inline-block' }} />
+                  {adminOnline ? `live · v${view.version}` : 'realtime offline — snapshot only'}
+                </span>
+              </SectionTitle>
               {devices === null ? (
                 <p style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
                   Load the device registry from the Brain admin plane above. You can revoke a Body here — a revoked device can never reconnect with its old identity.
@@ -482,17 +587,33 @@ export function BrainPage() {
                   const online = d.status === 'online';
                   const revoked = d.status === 'revoked';
                   const isSelf = d.bodyId === brainStatus?.bodyId;
+                  const isSelected = d.bodyId === selectedBodyId;
                   return (
-                    <div key={d.bodyId} style={{ padding: '10px 0', borderBottom: '1px solid var(--border-subtle)', opacity: revoked ? 0.55 : 1 }}>
+                    <div
+                      key={d.bodyId}
+                      onClick={() => selectBody(d)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectBody(d); } }}
+                      title="Select this Body to inspect it"
+                      style={{
+                        padding: '10px 10px', margin: '0 -10px', borderRadius: 'var(--radius-sm)',
+                        borderBottom: '1px solid var(--border-subtle)', opacity: revoked ? 0.55 : 1,
+                        cursor: 'pointer', outline: 'none',
+                        background: isSelected ? 'rgba(0,240,255,0.06)' : 'transparent',
+                        border: isSelected ? '1px solid rgba(0,240,255,0.25)' : '1px solid transparent',
+                      }}
+                    >
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <div style={{ width: 7, height: 7, borderRadius: '50%', background: revoked ? 'var(--accent-red)' : online ? 'var(--accent-green)' : 'var(--text-muted)', boxShadow: online ? '0 0 6px var(--accent-green)' : 'none', flexShrink: 0 }} />
                         <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{d.name}</span>
                         {isSelf && <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 'var(--radius-sm)', background: 'rgba(0,240,255,0.12)', color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)' }}>THIS BODY</span>}
                         {revoked && <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 'var(--radius-sm)', background: 'rgba(255,51,85,0.15)', color: 'var(--accent-red)', fontFamily: 'var(--font-mono)' }}>REVOKED</span>}
+                        {isSelected && <span style={{ fontSize: 9, padding: '2px 6px', borderRadius: 'var(--radius-sm)', background: 'rgba(0,255,136,0.12)', color: 'var(--accent-green)', fontFamily: 'var(--font-mono)' }}><FiCheckCircle size={9} style={{ verticalAlign: -1, marginRight: 3 }} />SELECTED</span>}
                         <div style={{ flex: 1 }} />
                         {!revoked && (
                           revokeArmed === d.bodyId ? (
-                            <div style={{ display: 'flex', gap: 6 }}>
+                            <div style={{ display: 'flex', gap: 6 }} onClick={(e) => e.stopPropagation()}>
                               <button onClick={() => revokeDevice(d)} disabled={adminBusy !== null} style={{ ...btnBase, background: 'rgba(255,51,85,0.2)', borderColor: 'var(--accent-red)', color: 'var(--accent-red)', padding: '4px 9px', fontSize: 11 }}>
                                 Confirm revoke
                               </button>
@@ -500,7 +621,7 @@ export function BrainPage() {
                             </div>
                           ) : (
                             <button
-                              onClick={() => setRevokeArmed(d.bodyId)}
+                              onClick={(e) => { e.stopPropagation(); setRevokeArmed(d.bodyId); }}
                               disabled={adminBusy !== null}
                               style={{ ...btnBase, color: 'var(--accent-red)', padding: '4px 9px', fontSize: 11 }}
                               title={isSelf ? 'Revoking this Body disconnects it and requires a fresh pairing' : 'Revoke this device'}
@@ -522,6 +643,27 @@ export function BrainPage() {
                     </div>
                   );
                 })
+              )}
+
+              {/* Selected Body details (safe public metadata only) */}
+              {selectedBody && (
+                <div style={{ marginTop: 8, padding: '10px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-tertiary)', border: '1px solid var(--border-subtle)' }}>
+                  <div style={{ fontSize: 10, letterSpacing: 1, color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)', marginBottom: 4 }}>SELECTED BODY</div>
+                  <Row k="Name" v={selectedBody.name || '—'} />
+                  <Row k="Body ID" v={selectedBody.bodyId} mono />
+                  <Row k="Status" v={String(selectedBody.status || '—').toUpperCase()} mono />
+                  <Row k="Protocol" v={selectedBody.protocol ? `v${selectedBody.protocol.min}–${selectedBody.protocol.max}` : '—'} mono />
+                  <Row k="Paired at" v={fmtDate(selectedBody.pairedAt)} />
+                  <Row k="Last seen" v={fmtTime(selectedBody.lastSeen)} />
+                  {selectedBody.revokedAt ? <Row k="Revoked at" v={fmtDate(selectedBody.revokedAt)} /> : null}
+                  <Row
+                    k="Capabilities"
+                    v={(selectedBody.capabilities || []).length > 0
+                      ? (selectedBody.capabilities as string[]).join(', ')
+                      : '—'}
+                    mono
+                  />
+                </div>
               )}
             </div>
           </div>
