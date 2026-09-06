@@ -201,7 +201,7 @@ BLAXIN keeps a persistent memory store (`.blaxin-state/memory.json` under the da
 One-command installation for Linux x86_64 downloads the latest stable release, verifies its checksum and installs it with desktop integration:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/tasinxxx/Blaxin/main/blaxin/install.sh | bash
 ```
 
 The installer is distro-aware:
@@ -215,7 +215,7 @@ launcher and desktop entry, as before.
 - Force the AppImage on any distro with `--appimage`:
 
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/install.sh | bash -s -- --appimage
+  curl -fsSL https://raw.githubusercontent.com/tasinxxx/Blaxin/main/blaxin/install.sh | bash -s -- --appimage
   ```
 
 ## Linux distribution notes
