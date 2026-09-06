@@ -183,11 +183,12 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
     <div style={{ textAlign: 'center', padding: '20px 0' }}>
       <div style={{
         width: 80, height: 80, borderRadius: 'var(--radius-xl)',
-        background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))',
+        background: '#000',
         display: 'flex', alignItems: 'center', justifyContent: 'center',
         margin: '0 auto 24px', boxShadow: 'var(--glow-intense)',
+        overflow: 'hidden',
       }}>
-        <FiZap size={40} color="#fff" />
+        <img src="/blaxin-mark.png" alt="BLAXIN logo" width={56} height={56} draggable={false} />
       </div>
       <h1 style={{
         fontSize: 32, fontWeight: 800, fontFamily: 'var(--font-mono)',

@@ -115,8 +115,16 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
             height: '100%',
             opacity: 0.5,
           }}>
+            <img
+              src="/blaxin-mark.png"
+              alt="BLAXIN logo"
+              width={64}
+              height={64}
+              draggable={false}
+              style={{ marginBottom: 16 }}
+            />
             <div style={{
-              fontSize: 48,
+              fontSize: 36,
               fontFamily: 'var(--font-mono)',
               fontWeight: 800,
               letterSpacing: 6,

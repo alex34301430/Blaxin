@@ -252,8 +252,16 @@ launcher and desktop entry, as before.
 - **Styling**: Custom cyberpunk CSS theme
 - **AI**: Multi-provider abstraction (OpenRouter, OpenAI, Anthropic, Google, Groq, Together, Ollama)
 
+## Branding
+
+The official BLAXIN logo (geometric "B" mark) lives at
+`brand/blaxin-logo-source.jpeg`; all application icons (Tauri window/tray,
+AppImage, `.deb`, favicon) and in-app brand marks are generated from it via
+`python3 brand/generate-icons.py`. See [docs/branding.md](docs/branding.md).
+
 ## Documentation
 
 - [docs/models.md](docs/models.md) — local model system: inventory, catalog, recommendation, runtime lifecycle, Brain integration
 - [docs/oci.md](docs/oci.md) — Oracle Cloud: security model, discovery, provisioning state machine, secure tunneled endpoints
 - [docs/distributed-brain.md](docs/distributed-brain.md) — distributed Brain/Body architecture, pairing, protocol, Multi-Body, task cancellation and recovery
+- [docs/branding.md](docs/branding.md) — official logo asset, icon generation, packaging usage

@@ -3,7 +3,7 @@ import { useAppStore } from '../utils/store';
 import {
   FiMessageSquare, FiSettings, FiCpu, FiPower,
   FiTerminal, FiMonitor, FiShield, FiInfo,
-  FiZap, FiActivity, FiHeart, FiBarChart2, FiLink,
+  FiActivity, FiHeart, FiBarChart2, FiLink,
 } from 'react-icons/fi';
 
 const navItems = [
@@ -41,14 +41,22 @@ export function Sidebar() {
           <div style={{
             width: 36,
             height: 36,
+            flexShrink: 0,
             borderRadius: 'var(--radius-md)',
-            background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))',
+            background: '#000',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             boxShadow: 'var(--glow-primary)',
+            overflow: 'hidden',
           }}>
-            <FiZap size={20} color="#fff" />
+            <img
+              src="/blaxin-mark.png"
+              alt="BLAXIN logo"
+              width={26}
+              height={26}
+              draggable={false}
+            />
           </div>
           <div>
             <div style={{
