@@ -393,4 +393,88 @@ export const api = {
 
   unpairBrain: () =>
     fetchAPI<{ success: boolean }>('/brain/unpair', { method: 'POST', body: '{}' }),
+
+  // ── Infrastructure: local models + Oracle Cloud ────────────
+
+  getResources: () => fetchAPI<any>('/resources'),
+
+  getCatalog: () => fetchAPI<any>('/catalog'),
+
+  recommend: (opts: {
+    capabilities?: string[];
+    preferLargest?: boolean;
+    scope?: 'local' | 'cloud';
+    compartmentId?: string;
+    shapeId?: string;
+  }) =>
+    fetchAPI<any>('/recommend', {
+      method: 'POST',
+      body: JSON.stringify(opts),
+    }),
+
+  getRuntimeStatus: () => fetchAPI<any>('/runtime/status'),
+
+  getRuntimeLogs: (lines = 100) =>
+    fetchAPI<any>(`/runtime/logs?lines=${lines}`),
+
+  runtimeAction: (action: 'install' | 'start' | 'stop' | 'restart') =>
+    fetchAPI<any>(`/runtime/${action}`, { method: 'POST', body: '{}' }),
+
+  pullModel: (modelId: string) =>
+    fetchAPI<any>('/runtime/pull', {
+      method: 'POST',
+      body: JSON.stringify({ modelId }),
+    }),
+
+  getCloudStatus: () => fetchAPI<any>('/cloud/status'),
+
+  getCloudTopology: () => fetchAPI<any>('/cloud/topology'),
+
+  getCloudShapes: (compartmentId: string) =>
+    fetchAPI<any>(`/cloud/shapes?compartmentId=${encodeURIComponent(compartmentId)}`),
+
+  getCloudInstances: (compartmentId: string) =>
+    fetchAPI<any>(`/cloud/instances?compartmentId=${encodeURIComponent(compartmentId)}`),
+
+  getCloudQuota: (compartmentId: string) =>
+    fetchAPI<any>(`/cloud/quota?compartmentId=${encodeURIComponent(compartmentId)}`),
+
+  getTunnelInfo: () => fetchAPI<any>('/cloud/tunnel'),
+
+  connectOci: (creds: {
+    tenancy: string;
+    user: string;
+    fingerprint: string;
+    privateKey: string;
+    region: string;
+  }) =>
+    fetchAPI<any>('/cloud/oci/connect', {
+      method: 'POST',
+      body: JSON.stringify(creds),
+    }),
+
+  disconnectOci: () =>
+    fetchAPI<any>('/cloud/oci', { method: 'DELETE' }),
+
+  getDeployments: () => fetchAPI<any>('/cloud/deployments'),
+
+  deploy: (input: {
+    shapeId: string;
+    compartmentId: string;
+    availabilityDomain: string;
+    modelId: string;
+    runtimeId: string;
+    ocpus?: number | null;
+    memoryInGbs?: number | null;
+  }) =>
+    fetchAPI<any>('/cloud/deploy', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  cancelDeployment: (id: string) =>
+    fetchAPI<any>(`/cloud/deployments/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+      body: '{}',
+    }),
 };

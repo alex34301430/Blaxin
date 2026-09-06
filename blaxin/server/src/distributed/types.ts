@@ -141,7 +141,7 @@ export const MESSAGE_TYPES = [
   'ready', 'state_sync', 'state_sync_ack', 'ack',
   'capabilities', 'ping', 'pong',
   'task_start', 'task_update', 'task_action', 'action_result',
-  'approval_required', 'approval_result',
+  'approval_required', 'approval_result', 'task_cancel',
   'task_complete', 'task_failed', 'error', 'revoked',
 ] as const;
 
@@ -170,11 +170,55 @@ export const ALLOWED_SENDERS: Record<MessageType, DeviceRole[]> = {
   action_result: [DEVICE_ROLE_BODY],
   approval_required: [DEVICE_ROLE_BODY],
   approval_result: [DEVICE_ROLE_BODY],
+  task_cancel: [DEVICE_ROLE_BODY],
   task_complete: [DEVICE_ROLE_BRAIN],
   task_failed: [DEVICE_ROLE_BRAIN],
   error: [DEVICE_ROLE_BODY, DEVICE_ROLE_BRAIN],
   revoked: [DEVICE_ROLE_BRAIN],
 };
+
+// ── Task lifecycle (canonical, Brain-side authority) ────────────
+
+/** Canonical task lifecycle. The Brain maps its internal driver states
+ * onto these for every surface (registry, REST, UI, recovery). */
+export type TaskLifecycle =
+  | 'QUEUED'
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'CONNECTION_LOST'
+  | 'UNKNOWN_OUTCOME'
+  | 'RECOVERING';
+
+export const TASK_LIFECYCLE_STATES: readonly TaskLifecycle[] = [
+  'QUEUED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED',
+  'CONNECTION_LOST', 'UNKNOWN_OUTCOME', 'RECOVERING',
+];
+
+/** Map an internal driver state onto the canonical lifecycle. Unknown
+ * states map to RUNNING (they are, by definition, in progress). */
+export function taskLifecycleOf(state: string): TaskLifecycle {
+  switch (state) {
+    case 'queued': return 'QUEUED';
+    case 'planning':
+    case 'thinking':
+    case 'executing':
+    case 'observing': return 'RUNNING';
+    case 'completed': return 'COMPLETED';
+    case 'failed': return 'FAILED';
+    case 'cancelled': return 'CANCELLED';
+    case 'interrupted': return 'CONNECTION_LOST';
+    case 'recovering': return 'RECOVERING';
+    case 'unknown-outcome': return 'UNKNOWN_OUTCOME';
+    default: return 'RUNNING';
+  }
+}
+
+export function isTerminalLifecycle(state: TaskLifecycle): boolean {
+  return state === 'COMPLETED' || state === 'FAILED' || state === 'CANCELLED'
+    || state === 'CONNECTION_LOST' || state === 'UNKNOWN_OUTCOME';
+}
 
 // ── Task / action payloads ──────────────────────────────────────
 
@@ -215,6 +259,13 @@ export interface TaskUpdatePayload {
   state: string;
   description?: string;
   stepCount?: number;
+}
+
+/** Body → Brain: the user asked to stop this task. The Brain resolves
+ * pending actions as CANCELLED and answers with task_failed CANCELLED
+ * once the driver unwinds (never replays, never fabricates outcomes). */
+export interface TaskCancelPayload {
+  taskId: string;
 }
 
 // ── Heartbeat / timing ──────────────────────────────────────────

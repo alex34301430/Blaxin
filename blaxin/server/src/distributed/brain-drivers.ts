@@ -45,6 +45,14 @@ export interface BrainTaskContext {
   requestAction(req: TaskActionRequest): Promise<ActionResult>;
   /** Record an activity note for observability (not sent to the Body). */
   note(component: string, message: string): void;
+  /** Register a hook the Brain invokes when the Body cancels the task
+   * (e.g. abort an in-flight provider call). Optional for drivers that
+   * poll `isCancelled` instead. */
+  onCancel?(hook: () => void): void;
+  /** True once the Body asked to cancel this task. Drivers should check
+   * between steps and unwind honestly (outcome kind 'failed', code
+   * 'CANCELLED'). */
+  isCancelled(): boolean;
 }
 
 export interface BrainTaskDriver {
@@ -79,6 +87,9 @@ export class DeterministicDriver implements BrainTaskDriver {
   async run(ctx: BrainTaskContext): Promise<DriverOutcome> {
     const summary: string[] = [];
     for (const step of this.options.steps) {
+      if (ctx.isCancelled()) {
+        return { kind: 'failed', error: 'The task was cancelled by the user.', code: 'CANCELLED' };
+      }
       if (!ctx.tools.some((t) => t.function.name === step.tool)) {
         return { kind: 'failed', error: `Body does not offer tool "${step.tool}"`, code: 'UNSUPPORTED_CAPABILITY' };
       }
@@ -100,6 +111,11 @@ export class DeterministicDriver implements BrainTaskDriver {
         return { kind: 'failed', error: 'The Body did not respond to the requested action in time. The task was stopped — no result was fabricated.', code: 'TIMEOUT' };
       }
       if (result.outcome === 'rejected') {
+        // The Brain fabricates this rejection when the Body cancels the
+        // task; surface it as the honest CANCELLED outcome, not an error.
+        if (ctx.isCancelled()) {
+          return { kind: 'failed', error: 'The task was cancelled by the user.', code: 'CANCELLED' };
+        }
         return { kind: 'failed', error: result.error || 'Action rejected by the Body', code: 'REJECTED' };
       }
       if (!result.success) {
@@ -243,29 +259,54 @@ export class LLMTaskDriver implements BrainTaskDriver {
       },
     ];
 
+    // Cancel support: the provider call itself is aborted when the Body
+    // cancels the task mid-'thinking' (never waits for a full LLM turn).
+    let cancelled = false;
+    let abortCurrent: (() => void) | undefined;
+    ctx.onCancel?.(() => {
+      cancelled = true;
+      abortCurrent?.();
+    });
+
     for (let step = 1; step <= this.maxSteps; step++) {
+      if (ctx.isCancelled()) {
+        return { kind: 'failed', error: 'The task was cancelled by the user.', code: 'CANCELLED' };
+      }
       ctx.update('thinking', `Thinking (step ${step})…`);
 
-      let response: AIResponse;
+      let response: AIResponse | undefined;
+      // Cancellation sentinel: the race resolves undefined when the Body
+      // cancels mid-'thinking' (no result is fabricated).
+      let abortChat: (value: undefined) => void = () => {};
+      const cancelPromise = new Promise<undefined>((resolve) => {
+        abortChat = resolve;
+      });
+      abortCurrent = () => abortChat(undefined);
       try {
-        response = await provider.chat({
-          messages: [
-            {
-              id: 'system',
-              role: 'system',
-              content: BRAIN_SYSTEM_PROMPT + this.describeBody(ctx),
-              timestamp: Date.now(),
-            },
-            ...history,
-          ],
-          model: modelId,
-          provider: providerId,
-          tools: ctx.tools.length > 0 ? ctx.tools : undefined,
-          maxTokens: 4096,
-          temperature: 0.7,
-        });
+        response = await Promise.race<AIResponse | undefined>([
+          provider.chat({
+            messages: [
+              {
+                id: 'system',
+                role: 'system',
+                content: BRAIN_SYSTEM_PROMPT + this.describeBody(ctx),
+                timestamp: Date.now(),
+              },
+              ...history,
+            ],
+            model: modelId,
+            provider: providerId,
+            tools: ctx.tools.length > 0 ? ctx.tools : undefined,
+            maxTokens: 4096,
+            temperature: 0.7,
+          }),
+          cancelPromise,
+        ]);
       } catch (error: any) {
         return { kind: 'failed', error: `Model error: ${error.message}`, code: 'MODEL_ERROR' };
+      }
+      if (response === undefined || cancelled || ctx.isCancelled()) {
+        return { kind: 'failed', error: 'The task was cancelled by the user.', code: 'CANCELLED' };
       }
 
       const rawCalls = response.toolCalls || [];
@@ -341,6 +382,9 @@ export class LLMTaskDriver implements BrainTaskDriver {
           };
         }
         if (actionResult.outcome === 'rejected') {
+          if (ctx.isCancelled()) {
+            return { kind: 'failed', error: 'The task was cancelled by the user.', code: 'CANCELLED' };
+          }
           return { kind: 'failed', error: `Body rejected the action: ${actionResult.error || 'policy violation'}`, code: 'REJECTED' };
         }
         if (!actionResult.success) {

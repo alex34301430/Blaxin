@@ -9,6 +9,7 @@ import { ConfirmationModal } from './components/ConfirmationModal';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { MetricsPage } from './pages/MetricsPage';
 import { BrainPage } from './pages/BrainPage';
+import { ModelsPage } from './pages/ModelsPage';
 import { SetupWizard } from './components/SetupWizard';
 import { UpdateNotifier } from './components/UpdateNotifier';
 import { useAppStore } from './utils/store';
@@ -112,6 +113,10 @@ export default function App() {
 
         {currentPage === 'diagnostics' && (
           <DiagnosticsPage />
+        )}
+
+        {currentPage === 'models' && (
+          <ModelsPage />
         )}
 
         {currentPage === 'brain' && (

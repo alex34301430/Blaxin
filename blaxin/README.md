@@ -13,10 +13,18 @@ Provider Abstraction Layer
     ↓
 Cloud Provider (OpenRouter/OpenAI/Anthropic/Google/Groq/Together)
     or
-Local Provider (Ollama)
+Local Provider (Ollama — local daemon, or an Oracle Cloud node
+                 tunneled to your loopback)
     ↓
 Model
 ```
+
+Since v1.2.0 BLAXIN also ships a **local model system** (real hardware
+discovery, a curated model catalog, deterministic fit recommendation
+and Ollama lifecycle management) and an **Oracle Cloud provisioning
+engine** (signed OCI REST access, discovery, resumable provisioning,
+reverse-tunnel inference). See [docs/models.md](docs/models.md) and
+[docs/oci.md](docs/oci.md).
 
 ## Distributed Brain (external intelligence)
 
@@ -33,11 +41,15 @@ Default mode is unchanged (`embedded` = the local orchestrator acts as the Brain
 
 The standalone Brain runs the real LLM path: configure its provider and model with `BLAXIN_BRAIN_PROVIDER` / `BLAXIN_BRAIN_MODEL` plus the provider key env var (keys stay on the Brain device, never in the protocol), and it reasons by requesting structured actions from the Body. See the docs for the live-provider validation instructions.
 
+**Multi-Body**: one Brain can serve many Bodies. The device registry is versioned and realtime-synced, routing is per-Body (capabilities are pre-checked before a task is targeted at a Body), and revocation of one Body never affects the others. Tasks follow a canonical lifecycle (`QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED/…`); users can cancel a running task from the Body UI (`task_cancel` over the wire), the Brain unwinds the driver honestly (no fabricated results), and restarts/network breaks reconcile through reconnect + state sync with replay protection.
+
 ## Features
 
 - **Multi-Provider AI Support**: OpenRouter (first-class), OpenAI, Anthropic, Google, Groq, Together, Ollama
 - **Live Model Discovery**: Automatically discovers available models from configured providers
 - **Free Model Detection**: Identifies and recommends free models
+- **Local Models (v1.2.0)**: real hardware discovery (CPU/RAM/GPU/VRAM/disk/arch), a maintainable model catalog, and deterministic recommendation with honest warnings — BLAXIN never invents benchmarks or shows an unearned READY
+- **Oracle Cloud Models (v1.2.0)**: connect an OCI account (RSA-SHA256 signed API, credentials encrypted at rest), discover real shapes/quotas/instances, and provision a resumable, cancellable inference node whose model endpoint reaches the Brain over a loopback SSH tunnel — never a public port
 - **Agent Task Engine**: state machine, step tracking, retry/backoff, provider fallback, loop detection, confirmation gate for high-impact tool actions, and a sequential task queue
 - **Task Memory**: persistent, searchable, deletable memory that never stores secrets
 - **Desktop Control**: Mouse, keyboard, window management via xdotool/ydotool
@@ -109,10 +121,21 @@ Open http://localhost:5173 in your browser.
 3. Enter the key in BLAXIN Settings → Providers
 
 ### Ollama (Local)
-1. Install Ollama: https://ollama.ai
-2. Pull a model: `ollama pull llama3`
-3. Start Ollama: `ollama serve`
+1. Install Ollama: https://ollama.ai (or click **Install** on the Models page — BLAXIN can install and start it for you)
+2. Pull a model: `ollama pull llama3` (or use **PULL** on the Models page)
+3. Start Ollama: `ollama serve` (or **START** on the Models page)
 4. No API key needed — BLAXIN auto-detects it
+
+The **Models** page shows your real machine (CPU/RAM/GPU/VRAM/disk), recommends the best catalog model that actually fits, and manages the runtime lifecycle with truthful status.
+
+### Oracle Cloud (optional)
+
+1. Create an OCI API key for your user
+2. Models page → Oracle Cloud → *Verify & Connect*
+3. Set `BLAXIN_TUNNEL_HOST` and install the shown tunnel public key (see [docs/oci.md](docs/oci.md))
+4. Discover shapes → pick one → Deploy a catalog model
+
+The provisioning state machine is resumable and cancellable; READY only appears after a real health check, a real inference round trip and a successful Brain connection.
 
 ## Tools
 
@@ -165,6 +188,9 @@ For a remote web deployment behind a public domain, set e.g. `BLAXIN_ALLOWED_ORI
 | `BLAXIN_BRAIN_TLS_KEY` / `BLAXIN_BRAIN_TLS_CERT` | Brain PEM file paths — when both are set the Brain serves WSS only (remote Bodies must connect with `wss://`) |
 | `BLAXIN_BRAIN_CA_FILE` | Body: PEM CA bundle that signed the Brain's TLS certificate (private/self-signed LAN setups) |
 | `BLAXIN_BRAIN_ALLOW_INSECURE` | Body: `1` = explicit dev override allowing plaintext `ws://` off-loopback and skipping certificate checks (never default) |
+| `BLAXIN_OLLAMA_HOST` / `BLAXIN_OLLAMA_PORT` | Local model runtime endpoint (default loopback `127.0.0.1:11434`) |
+| `BLAXIN_TUNNEL_HOST` / `BLAXIN_TUNNEL_PORT` | SSH address of this machine that cloud instances dial back to (required for OCI model deployments) |
+| `BLAXIN_TUNNEL_LOCAL_PORT` | Local loopback port where the tunneled cloud model endpoint appears (default `12345`) |
 
 ## Memory
 
@@ -201,7 +227,7 @@ launcher and desktop entry, as before.
   against the distro's own WebKitGTK, which is the most reliable configuration.
 
   ```bash
-  sudo apt install ./blaxin_1.1.1_amd64.deb   # or: sudo dpkg -i … && sudo apt-get install -f
+  sudo apt install ./blaxin_1.2.0_amd64.deb   # or: sudo dpkg -i … && sudo apt-get install -f
   blaxin
   ```
 
@@ -225,3 +251,9 @@ launcher and desktop entry, as before.
 - **Client**: React 18, TypeScript, Vite, Zustand
 - **Styling**: Custom cyberpunk CSS theme
 - **AI**: Multi-provider abstraction (OpenRouter, OpenAI, Anthropic, Google, Groq, Together, Ollama)
+
+## Documentation
+
+- [docs/models.md](docs/models.md) — local model system: inventory, catalog, recommendation, runtime lifecycle, Brain integration
+- [docs/oci.md](docs/oci.md) — Oracle Cloud: security model, discovery, provisioning state machine, secure tunneled endpoints
+- [docs/distributed-brain.md](docs/distributed-brain.md) — distributed Brain/Body architecture, pairing, protocol, Multi-Body, task cancellation and recovery

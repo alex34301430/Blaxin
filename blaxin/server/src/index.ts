@@ -27,6 +27,11 @@ import { dataPath } from './utils/paths.js';
 import { loadOrCreateIdentity } from './distributed/identity.js';
 import { RemoteBrainDriver } from './distributed/remote-brain.js';
 import { validateBrainUrl } from './distributed/transport-policy.js';
+import { OllamaRuntime } from './models/ollama-runtime.js';
+import { OciCloudProvider } from './cloud/oci/client.js';
+import { resolveOciPlatformImageId } from './cloud/oci/client.js';
+import { DeploymentEngine } from './cloud/deployment.js';
+import { createInfrastructureRouter } from './api/infrastructure.js';
 import { ProviderId, AppConfig } from './types.js';
 
 // ── External Brain mode ─────────────────────────────────────────
@@ -117,6 +122,33 @@ const PORT = parseInt(process.env.PORT || '3001');
 const HOST = process.env.BLAXIN_HOST || '0.0.0.0';
 const EXTRA_ALLOWED_ORIGINS = getAllowedOriginsFromEnv();
 
+// ── Local model runtime + OCI cloud (infrastructure) ───────────
+const ollamaRuntime = new OllamaRuntime();
+const ociProvider = new OciCloudProvider();
+const deploymentEngine = new DeploymentEngine({
+  provider: ociProvider,
+  // The reverse tunnel: cloud instances dial back to THIS machine. When
+  // BLAXIN_TUNNEL_HOST is unset the engine fails deployments honestly.
+  brainSshHost: process.env.BLAXIN_TUNNEL_HOST || '',
+  brainSshPort: Number(process.env.BLAXIN_TUNNEL_PORT || 22),
+  tunnelPort: Number(process.env.BLAXIN_TUNNEL_LOCAL_PORT || 12345),
+  resolveImageId: (arch) => resolveOciPlatformImageId(arch),
+});
+
+/** Point the Ollama provider at a loopback endpoint (loopback-only guard
+ * lives in the provider itself). Used by cloud deployments once their
+ * tunneled endpoint is verified. */
+function setOllamaEndpoint(endpoint: string): boolean {
+  const ollama = providers.getProvider('ollama') as unknown as { setEndpoint?(e: string): boolean };
+  return typeof ollama?.setEndpoint === 'function' ? ollama.setEndpoint(endpoint) : false;
+}
+
+/** Make Ollama the active provider (and optionally the active model). */
+function activateOllamaModel(modelId?: string): void {
+  providers.setActiveProvider('ollama');
+  if (modelId) providers.setActiveModel(modelId);
+}
+
 const app = express();
 
 // CORS: allow only trusted origins (see utils/security.ts). Browsers from
@@ -135,6 +167,23 @@ app.use('/api', (req, res, next) => {
   logger.warn('security', `Blocked ${req.method} ${req.path} from origin ${origin || '(none)'}`);
   res.status(403).json({ error: 'Origin not allowed' });
 });
+
+// Infrastructure: local models, resource inventory, recommendations,
+// runtime lifecycle and OCI cloud/deployments. Mounted behind the
+// origin guard above (state-changing calls are rejected from untrusted
+// browser origins).
+app.use('/api', createInfrastructureRouter({
+  runtime: ollamaRuntime,
+  cloud: ociProvider,
+  deployments: deploymentEngine,
+  tunnel: {
+    host: process.env.BLAXIN_TUNNEL_HOST || '',
+    port: Number(process.env.BLAXIN_TUNNEL_PORT || 22),
+    localPort: Number(process.env.BLAXIN_TUNNEL_LOCAL_PORT || 12345),
+  },
+  setOllamaEndpoint,
+  activateOllamaModel,
+}));
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -630,6 +679,10 @@ server.listen(PORT, HOST, async () => {
   
   // Initialize providers
   await providers.initializeAll();
+  
+  // Resume interrupted cloud deployments (restart-safe: each failure is
+  // recorded honestly; non-idempotent steps are never replayed).
+  void Promise.allSettled(deploymentEngine.resumeAll());
   
   // Start session state auto-save
   sessionState.startAutoSave();

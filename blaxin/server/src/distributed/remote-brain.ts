@@ -232,11 +232,14 @@ export class RemoteBrainDriver {
     }
   }
 
-  /** Abort the running remote task (Brain resolves pending actions as
-   * cancelled; task_failed CANCELLED is surfaced as a clean stop). */
+  /** Abort the running remote task with the dedicated task_cancel
+   * protocol message. The Brain cancels pending actions and answers with
+   * task_failed CANCELLED (surfaced as a clean stop). When the link is
+   * already down we simply drop the local task mirror. */
   stopTask(): void {
     if (this.isReady() && this.task) {
-      this.link.sendAs('error', { code: 'STOP_REQUESTED', message: 'Task stopped by user' });
+      this.link.sendAs('task_cancel', { taskId: this.task.id });
+      this.emit('agent-state', { state: 'cancelling', description: 'Stopping task…' });
     } else if (this.task) {
       this.clearTask('Stopped by user');
     }
@@ -590,6 +593,7 @@ export class RemoteBrainDriver {
       case 'completed': return 'completed';
       case 'interrupted': return 'error';
       case 'thinking': return 'thinking';
+      case 'cancelled': return 'thinking'; // transient — the terminal CANCELLED lands via task_failed
       default: return 'thinking';
     }
   }

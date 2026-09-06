@@ -11,6 +11,7 @@ const navItems = [
   { id: 'terminal', icon: FiTerminal, label: 'Terminal' },
   { id: 'metrics', icon: FiBarChart2, label: 'Metrics' },
   { id: 'diagnostics', icon: FiHeart, label: 'Diagnostics' },
+  { id: 'models', icon: FiCpu, label: 'Models' },
   { id: 'brain', icon: FiLink, label: 'Brain' },
 ];
 
@@ -207,7 +208,7 @@ export function Sidebar() {
           fontFamily: 'var(--font-mono)',
           letterSpacing: 1,
         }}>
-          BLAXIN v1.1.1
+          BLAXIN v1.2.0
         </div>
       </div>
     </aside>

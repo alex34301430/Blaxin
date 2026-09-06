@@ -439,14 +439,57 @@ per reasoning step, which is why the test budget is 4 minutes. The live
 test fails loudly on provider/model/key problems — it never fabricates
 a result.
 
+## Task cancellation & lifecycle (B5)
+
+Tasks follow a canonical, Brain-authoritative lifecycle:
+`QUEUED → RUNNING → COMPLETED | FAILED | CANCELLED |
+CONNECTION_LOST | UNKNOWN_OUTCOME | RECOVERING` (see
+`distributed/types.ts` for the mapping used by registry, REST and UI
+surfaces).
+
+### Cancellation over the wire
+
+The user can stop a running task from the Body UI. The Body sends a
+dedicated `task_cancel` message (payload `{ taskId }`, Body→Brain
+only). The Brain:
+
+1. marks the task session `CANCELLED` immediately (`cancelRequested`),
+2. sends a truthful `task_update { state: 'cancelled' }` to the Body,
+3. resolves every still-pending `task_action` as a rejection with the
+   explicit `CANCELLED_BY_USER` marker (never a fabricated result),
+4. wakes the driver: the LLM driver races its in-flight provider call
+   against a cancel sentinel, so cancellation is immediate — it does
+   not wait for a full model turn,
+5. answers with `task_failed { code: 'CANCELLED' }`, which the Body
+   surfaces as a clean "Task stopped", not an error.
+
+Cancellation is idempotent: a `task_cancel` for an unknown/finished
+ task is acknowledged and ignored; a mismatched task id is an error.
+
+### Duplicate `task_start` handling
+
+A `task_start` while a task is already active on the same Body is
+rejected (one task per Body at a time); the Brain answers honestly
+instead of queueing a second concurrent task.
+
+### Restart synchronization & recovery
+
+After a Body reconnects (network blip, Body restart), the Brain
+reconciles per-Body task sessions: interrupted tasks become
+`CONNECTION_LOST`/`UNKNOWN_OUTCOME` rather than silently "running", and
+recovery re-drives them through the normal driver path. Task ids are
+replay-protected by the existing replay guard, so a reconnected Body
+cannot re-deliver an already-completed task outcome.
+
 ## Roadmap (not yet implemented)
 
 Model router, Brain-owned memory store, LAN discovery, QR pairing,
 relay transport, coordinated signed releases and update compatibility
 are future phases — the backend architecture (one Brain → many Bodies,
 persistent device registry, protocol negotiation, revocation) already
-supports them. State sync + task recovery (B5) is the next phase and can
-build on the versioned registry and per-Body task sessions.
+supports them. Local models + Oracle Cloud inference (implemented in
+v1.2.0 — see `docs/models.md` and `docs/oci.md`) now supply the Brain's
+model from the local machine or a cloud shape.
 
 ### Multi-body test files
 

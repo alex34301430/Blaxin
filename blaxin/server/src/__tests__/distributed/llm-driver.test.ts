@@ -129,6 +129,7 @@ function makeHarness(options?: {
     update: () => {},
     note: () => {},
     requestAction: async (req) => { actions.push(req); return respond(req); },
+    isCancelled: () => false,
   };
   // NB: use explicit undefined checks so callers can pass null (no
   // provider / no model) — `??` would swallow null back to the default.

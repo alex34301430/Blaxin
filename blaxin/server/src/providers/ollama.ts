@@ -6,8 +6,41 @@ import { logger } from '../utils/logger.js';
 export class OllamaProvider extends AIProvider {
   readonly id = 'ollama' as const;
   readonly name = 'Ollama (Local)';
-  readonly baseUrl = 'http://localhost:11434';
+  /** Overridable so a cloud deployment can point the provider at its
+   * tunneled loopback endpoint (set via setEndpoint). Loopback-only:
+   * non-loopback overrides are rejected (see setEndpoint). */
+  private endpointOverride: string | null = null;
   readonly apiKeyRequired = false;
+
+  get baseUrl(): string {
+    return this.endpointOverride ?? 'http://localhost:11434';
+  }
+
+  /** Point this provider at a specific loopback endpoint (the reverse
+   * SSH tunnel from a cloud deployment, or the local daemon). Only
+   * loopback endpoints are accepted. Returns false on rejection. */
+  setEndpoint(endpoint: string): boolean {
+    try {
+      const u = new URL(endpoint);
+      const h = u.hostname;
+      if (h !== '127.0.0.1' && h !== 'localhost' && h !== '::1' && h !== '[::1]') {
+        logger.warn('ollama', 'Rejected non-loopback endpoint override');
+        return false;
+      }
+      this.endpointOverride = `${u.protocol}//127.0.0.1:${u.port || (u.protocol === 'https:' ? '443' : '80')}`;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  clearEndpoint(): void {
+    this.endpointOverride = null;
+  }
+
+  hasEndpointOverride(): boolean {
+    return this.endpointOverride !== null;
+  }
 
   async initialize(): Promise<void> {
     // Ollama doesn't need an API key
@@ -16,7 +49,7 @@ export class OllamaProvider extends AIProvider {
 
   async validateKey(_apiKey?: string): Promise<{ valid: boolean; error?: string }> {
     try {
-      const response = await fetch('http://localhost:11434/api/tags');
+      const response = await fetch(`${this.baseUrl}/api/tags`);
       if (response.ok) return { valid: true };
       return { valid: false, error: 'Ollama is not running. Start it with: ollama serve' };
     } catch {
@@ -26,11 +59,11 @@ export class OllamaProvider extends AIProvider {
 
   async fetchModels(): Promise<ModelInfo[]> {
     try {
-      const response = await fetch('http://localhost:11434/api/tags');
+      const response = await fetch(`${this.baseUrl}/api/tags`);
       if (!response.ok) throw new Error('Ollama not running');
 
       const data = await response.json() as { models: Array<{ name: string; size: number; modified_at: string }> };
-      
+
       return (data.models || []).map(m => ({
         id: m.name,
         name: m.name,
@@ -67,7 +100,7 @@ export class OllamaProvider extends AIProvider {
     }
 
     try {
-      const response = await fetch('http://localhost:11434/api/chat', {
+      const response = await fetch(`${this.baseUrl}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -79,7 +112,7 @@ export class OllamaProvider extends AIProvider {
       }
 
       const data = await response.json();
-      
+
       let content = data.message?.content || '';
       const toolCalls = parseToolCalls(content, data.message?.tool_calls);
 

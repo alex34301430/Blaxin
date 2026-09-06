@@ -127,6 +127,7 @@ interface TaskSession {
   description?: string;
   startTime: number;
   active: boolean;
+  cancelRequested?: boolean;
   outcome?: { kind: 'completed'; summary: string } | { kind: 'failed'; error: string; code?: string };
 }
 
@@ -175,6 +176,9 @@ export class BrainRuntime {
   }>();
   private readonly pendingActions = new Map<string, PendingAction>();
   private readonly activeTasks = new Map<DeviceId, TaskSession>();
+  /** Per-task cancel hooks registered by drivers that poll cancellation
+   * (e.g. the LLM provider loop). Cleared when the task ends. */
+  private readonly cancelHooks = new Map<string, Set<() => void>>();
   private readonly replay = new ReplayGuard();
   private readonly knownTaskIds = new Map<string, number>(); // completed/failed task ids (bounded)
   private attemptLog = new Map<string, number[]>();
@@ -1005,6 +1009,9 @@ export class BrainRuntime {
       case 'task_start':
         this.handleTaskStart(peer, msg);
         break;
+      case 'task_cancel':
+        this.handleTaskCancel(peer, msg);
+        break;
       case 'action_result':
         this.handleActionResult(peer, msg);
         break;
@@ -1141,6 +1148,7 @@ export class BrainRuntime {
   }
 
   private async runDriver(peer: PeerState, session: TaskSession): Promise<void> {
+    const runtime = this;
     const bodyId = peer.bodyId as DeviceId;
     const driver = this.drivers.get(session.driverId)!;
     const capabilitySnapshot = [...peer.capabilities];
@@ -1166,6 +1174,17 @@ export class BrainRuntime {
         return this.requestActionFor(peer, session, req);
       },
       note: (component: string, message: string) => logger.info(component, message),
+      /** Registered by drivers so handleTaskCancel can interrupt them
+       * (e.g. abort an in-flight provider chat call). */
+      onCancel(hook: () => void): void {
+        let hooks = runtime.cancelHooks.get(session.taskId);
+        if (!hooks) {
+          hooks = new Set();
+          runtime.cancelHooks.set(session.taskId, hooks);
+        }
+        hooks.add(hook);
+      },
+      isCancelled: () => session.cancelRequested === true,
     };
 
     let outcome: { kind: 'completed'; summary: string } | { kind: 'failed'; error: string; code?: string };
@@ -1177,6 +1196,7 @@ export class BrainRuntime {
 
     session.active = false;
     session.outcome = outcome;
+    this.cancelHooks.delete(session.taskId);
     this.activeTasks.delete(bodyId);
     this.knownTaskIds.set(session.taskId, this.now());
     this.trimKnownTasks();
@@ -1253,6 +1273,58 @@ export class BrainRuntime {
       };
       this.send(live, createMessage('brain', this.identity.id, 'task_action', payload, req.requestId));
     });
+  }
+
+  /** Body → Brain: the user stopped the task. The driver is aborted (its
+   * pending action promise resolves as CANCELLED), every still-pending
+   * action is cancelled, the lifecycle is CANCELLED — and the Body is
+   * answered with task_failed {code: CANCELLED} so the UI shows a clean
+   * stop instead of a fake error. */
+  private handleTaskCancel(peer: PeerState, msg: WireMessage): void {
+    const bodyId = peer.bodyId as DeviceId;
+    const p = msg.payload || {};
+    const taskId = typeof p.taskId === 'string' ? p.taskId : '';
+    const task = this.activeTasks.get(bodyId);
+    if (!task) {
+      // Unknown or already-finished task: acknowledge idempotently.
+      logger.info('brain', `task_cancel for unknown/finished task ${taskId || '(none)'} on ${bodyId} — ignored`);
+      return;
+    }
+    if (taskId && taskId !== task.taskId) {
+      this.sendError(peer, 'TASK_MISMATCH', 'The cancelled task id does not match the active task');
+      return;
+    }
+    logger.info('brain', `Task ${task.taskId} cancelled by body ${bodyId}`);
+    task.state = 'cancelled';
+    task.description = 'Cancelled by user';
+    task.cancelRequested = true;
+    const live = this.peers.get(bodyId);
+    if (live && live.ws.readyState === WebSocket.OPEN) {
+      this.send(live, createMessage('brain', this.identity.id, 'task_update', {
+        taskId: task.taskId,
+        state: 'cancelled',
+        description: 'Cancelling…',
+      }));
+    }
+    // Wake the driver: pending action promises resolve as cancelled.
+    for (const [actionId, pending] of this.pendingActions) {
+      if (pending.bodyId === bodyId && pending.taskId === task.taskId) {
+        this.pendingActions.delete(actionId);
+        pending.resolve({
+          taskId: pending.taskId,
+          actionId: pending.actionId,
+          requestId: pending.actionId,
+          outcome: 'rejected',
+          executed: false,
+          replay: false,
+          success: false,
+          error: 'CANCELLED_BY_USER: the task was stopped before this action ran',
+        });
+      }
+    }
+    if (this.cancelHooks.has(task.taskId)) {
+      for (const hook of this.cancelHooks.get(task.taskId)!) hook();
+    }
   }
 
   private handleActionResult(peer: PeerState, msg: WireMessage): void {
