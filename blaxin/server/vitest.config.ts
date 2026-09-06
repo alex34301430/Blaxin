@@ -12,6 +12,11 @@ export default defineConfig({
     ],
     exclude: ['dist/**', 'node_modules/**'],
     environment: 'node',
+    // The distributed integration tests drive real sockets/TLS with
+    // internal waitFor tolerances of 8–10s; the vitest default 5s test
+    // ceiling makes them time out under load (CI, busy dev machines).
+    // Explicit per-test timeouts (60s/180s) still take precedence.
+    testTimeout: 30_000,
     env: {
       // Keep tests from touching real runtime state
       BLAXIN_MEMORY_FILE: '.blaxin-state/memory.test.json',

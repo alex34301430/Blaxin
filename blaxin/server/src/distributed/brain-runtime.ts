@@ -562,6 +562,10 @@ export class BrainRuntime {
   }
 
   isBodyConnected(bodyId: DeviceId): boolean {
+    // Revoked is terminal: a socket still tearing down after a revocation
+    // must never make a revoked Body look connected (same rule as
+    // toPublicBody's registry snapshots).
+    if (this.registry.isRevoked(bodyId)) return false;
     return this.peers.get(bodyId)?.connectionState === 'CONNECTED';
   }
 
