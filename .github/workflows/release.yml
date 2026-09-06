@@ -306,12 +306,12 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          # The deb updater verifies with the SAME key that signs the
-          # AppImage, so we sign with the installed `cargo tauri signer`
-          # (the minisign CLI is not packaged on ubuntu-22.04). The signer
-          # accepts the TAURI_SIGNING_PRIVATE_KEY base64 form directly and
-          # writes <file>.sig next to the deb (single-line base64, which
-          # is exactly the manifest format).
+          # The Tauri CLI reads TAURI_SIGNING_PRIVATE_KEY /
+          # TAURI_SIGNING_PRIVATE_KEY_PASSWORD straight from the
+          # environment — the same mechanism the build step above used to
+          # sign the AppImage. Do NOT also pass -f/--private-key-path:
+          # with the env var set, the CLI fails with "the argument
+          # '--private-key-path' cannot be used with '--private-key'".
           VERSION="${{ steps.version.outputs.version_num }}"
           DEB="artifacts/blaxin_${VERSION}_amd64.deb"
           SIG="artifacts/blaxin_${VERSION}_amd64.deb.sig"
@@ -324,43 +324,9 @@ jobs:
             exit 1
           fi
 
-          KEY_FILE="$(mktemp)"
-          trap 'rm -f "$KEY_FILE"' EXIT
-
-          run_signer() {
-            # $1 = key material to write. The signer base64-decodes the
-            # file verbatim, so strip any accidental newlines first.
-            printf '%s' "$1" > "$KEY_FILE"
-            if [ -n "${TAURI_SIGNING_PRIVATE_KEY_PASSWORD:-}" ]; then
-              cargo tauri signer sign -f "$KEY_FILE" -p "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "$DEB" 2>&1
-            else
-              cargo tauri signer sign -f "$KEY_FILE" "$DEB" 2>&1
-            fi
-          }
-
-          signed_ok=0
-          OUTPUT=""
-          # Attempt 1: the secret verbatim (trimmed). This is the form
-          # Tauri's own updater signing consumes.
-          RAW="$(printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" | tr -d '\r\n')"
-          if OUTPUT="$(run_signer "$RAW")"; then
-            signed_ok=1
-          fi
-
-          # Attempt 2: the base64-decoded (raw key text) form.
-          if [ "$signed_ok" -ne 1 ]; then
-            DECODED="$(printf '%s' "$RAW" | base64 -d 2>/dev/null || true)"
-            if [ -n "$DECODED" ] && OUTPUT="$(run_signer "$DECODED")"; then
-              signed_ok=1
-            fi
-          fi
-
-          if [ "$signed_ok" -ne 1 ]; then
-            echo "Signer output:"
-            echo "$OUTPUT"
-            echo "ERROR: could not sign the deb package with the Tauri signer"
-            exit 1
-          fi
+          # Both the key and its password come from the environment (set
+          # above), mirroring the build step that signed the AppImage.
+          cargo tauri signer sign "$DEB" </dev/null
 
           if [ ! -s "$SIG" ]; then
             echo "ERROR: signing did not produce $SIG"
