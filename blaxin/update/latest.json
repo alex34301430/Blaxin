@@ -1,17 +1,17 @@
 {
-  "version": "1.1.0",
-  "notes": "BLAXIN v1.1.0 \u2014 See https://github.com/alex34301430/Blaxin/releases/tag/v1.1.0 for details.",
-  "pub_date": "2026-09-03T09:24:51Z",
+  "version": "1.2.0",
+  "notes": "BLAXIN vv1.2.0 \u2014 See https://github.com/alex34301430/Blaxin/releases/tag/v1.2.0 for details.",
+  "pub_date": "2026-09-06T10:33:38Z",
   "platforms": {
     "linux-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTcTRPa3l4NjJhTy94UUpqbnZ5emhBN3FwaHdYYytLanF0cFF1akpEQkJOd3FYNk5tYllhdUhLQm1zdkx2NVBtYUZFT3RGMzJNblFoRDRWYjZRaTBRbHh6a29reERhbHdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NDI3NDkwCWZpbGU6QkxBWElOXzEuMS4wX2FtZDY0LkFwcEltYWdlCnJvdWpMWktrVFFXQmxmTFlINEsrTUdDMDJPM1R4S0dxTjhtR3QwMk1NanlRR0pkVGhDeUZnT1dJaC96RzN0NTR4YzZiM2RpeVpLMDJpRGdmM0Y3bkRnPT0K",
-      "url": "https://github.com/alex34301430/Blaxin/releases/download/v1.1.0/BLAXIN_1.1.0_amd64.AppImage",
-      "sha256": "7fc93678e4494df72c2914d5cd43578532730d1a9d9ada91b477884bd151e957"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTcTRPa3l4NjJhTzNtV3VmK214Wk0zNFBYbDBwT1g5ZEdrekVZL2lBcExBMjhDaGNzTjNRK0xRWHhTS01rQndSYUxPdkJXUFYrQ290OWtXajZ3WUpzdUd0dVdtclV4WFFJPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NjkwODE3CWZpbGU6QkxBWElOXzEuMi4wX2FtZDY0LkFwcEltYWdlCjNwS0Q5WWVrQTlMaXg5RVRVOHZNZW9PSTEvRGRhNC8yRE5adnV3TlFlaisybnpFN0dyTGI2a3Jxa2FESGtiVVVnMVZsMDZCcjAvSHlodXkxblU1akNnPT0K",
+      "url": "https://github.com/alex34301430/Blaxin/releases/download/v1.2.0/BLAXIN_1.2.0_amd64.AppImage",
+      "sha256": "f8bbe9a20bb12a5639ad8f78f9a5da06402f89206662c0afeb815743f484e279"
     }
   },
   "deb": {
-    "url": "https://github.com/alex34301430/Blaxin/releases/download/v1.1.0/blaxin_1.1.0_amd64.deb",
-    "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTcTRPa3l4NjJhT3dTVnA5dmVvSjFGQVZranNkUTc3VXltZkNyWjh0SzBFWXQ2bnIrNjA2Y25GSDlKb1owbTFEKzdoU3JtWitoSnVsbE5teXNWdERwc1RJcUplU2EzVGdjPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NDQzMjAxCWZpbGU6YmxheGluXzEuMS4wX2FtZDY0LmRlYgpqSjVBVldHNEJ4b3o0S1NoZUxLU1FGYTFlMnpWN1h4dlBOQUlHanMvZForOVU5NUJ5WnNPM3c3dHZ2YU9LRlZ4cnpITXZBTXB2SXh5bmZNUFNYWlpCUT09Cg==",
-    "sha256": "adb4aa8d729117ef96e456a68bb7930b812066ba60f1bda8a2b7c9b6dc567cbf"
+    "url": "https://github.com/alex34301430/Blaxin/releases/download/v1.2.0/blaxin_1.2.0_amd64.deb",
+    "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTcTRPa3l4NjJhTytLU3RmN3VvWDRPRGNSUmxDSDdBUHQxaStvaTA3OFIwdHVxQ0FsZUxMQWFPKzh3MlMwb1Z2cG9GVXRST2g2dmhjQzJIbTU3WW5DeDhNb0ZhZENjUHdBPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg4NjkwODE4CWZpbGU6YmxheGluXzEuMi4wX2FtZDY0LmRlYgpTTkRqNGpmdzZHMVVhRWZaV0txY1cvanZzRVFESG53cXJsTFpLVUt5M1R3K3NpbUFGN1FDaW5iMjFkY0JsZnpiVEN6K2hVQVJiRkJSakd5ci80SElDQT09Cg==",
+    "sha256": "b9170b3e7aa74a609a3005b98b5a2e4498eaf8bd737572e0d09b9b53e866524a"
   }
 }
