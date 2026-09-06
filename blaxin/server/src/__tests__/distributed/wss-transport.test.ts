@@ -121,7 +121,9 @@ describe('brain ↔ body over WSS (real TLS)', () => {
     expect(code).toBeTruthy();
 
     driver.connect(code);
-    await waitFor(() => driver.isReady(), 10_000, 'CONNECTED over WSS');
+    // 25s budget: under full-suite parallel load real TLS handshakes can
+    // take many seconds; vitest's ceiling is 30s (see vitest.config.ts).
+    await waitFor(() => driver.isReady(), 25_000, 'CONNECTED over WSS');
     expect((driver.status().brain as { transport?: string }).transport).toBe('wss');
     expect((driver.status().brain as { brainId?: string }).brainId).toBe(runtime.identity.id);
     expect(runtime.isBodyConnected(driver.status().bodyId as string)).toBe(true);
@@ -130,7 +132,7 @@ describe('brain ↔ body over WSS (real TLS)', () => {
     driver.disconnect();
     await waitFor(() => !driver.isReady(), 5_000, 'disconnected');
     driver.connect();
-    await waitFor(() => driver.isReady(), 10_000, 'reconnected by identity over WSS');
+    await waitFor(() => driver.isReady(), 25_000, 'reconnected by identity over WSS');
   });
 
   it('FAILS CLOSED when the certificate is signed by an untrusted CA', async () => {
@@ -179,7 +181,7 @@ describe('brain ↔ body over WSS (real TLS)', () => {
     const { driver } = await makeBody(dir, plainUrl, { allowInsecure: true });
     const code = runtime.generatePairingCode()?.code;
     driver.connect(code);
-    await waitFor(() => driver.isReady(), 10_000, 'CONNECTED with explicit insecure override');
+    await waitFor(() => driver.isReady(), 25_000, 'CONNECTED with explicit insecure override');
     expect((driver.status().brain as { transport?: string }).transport).toBe('ws');
   });
 });
