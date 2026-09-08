@@ -610,13 +610,20 @@ wss.on('connection', (ws) => {
         case 'ping':
           ws.send(JSON.stringify({ event: 'pong', data: { timestamp: Date.now() } }));
           break;
-        case 'confirmation-response':
+        case 'confirmation-response': {
+          // The user may scope their approval: once (default), the rest of
+          // the task, or the rest of the session. Anything unexpected is
+          // treated as a plain one-shot approval.
+          const scope = msg.data?.scope === 'task' || msg.data?.scope === 'session'
+            ? msg.data.scope
+            : 'once';
           if (isExternalMode()) {
-            getRemoteBrain()?.respondToConfirmation(msg.data?.stepId, msg.data?.approved === true);
+            getRemoteBrain()?.respondToConfirmation(msg.data?.stepId, msg.data?.approved === true, scope);
           } else {
-            orchestrator.respondToConfirmation(msg.data?.stepId, msg.data?.approved === true);
+            orchestrator.respondToConfirmation(msg.data?.stepId, msg.data?.approved === true, scope);
           }
           break;
+        }
       }
     } catch (error: any) {
       logger.error('websocket', 'Message handling error', error);

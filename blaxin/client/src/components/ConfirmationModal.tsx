@@ -12,7 +12,7 @@ import { FiAlertTriangle, FiCheck, FiX, FiShield } from 'react-icons/fi';
 export function ConfirmationModal({
   onRespond,
 }: {
-  onRespond: (approved: boolean) => void;
+  onRespond: (approved: boolean, scope?: 'once' | 'task' | 'session') => void;
 }) {
   const { pendingConfirmation, agentState } = useAppStore();
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -128,7 +128,7 @@ export function ConfirmationModal({
           )}
         </div>
 
-        <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+        <div style={{ padding: '14px 20px', borderTop: '1px solid var(--border-subtle)', display: 'flex', justifyContent: 'flex-end', gap: 8, flexWrap: 'wrap' }}>
           <button
             ref={cancelRef}
             onClick={() => onRespond(false)}
@@ -142,8 +142,35 @@ export function ConfirmationModal({
             <FiX size={12} /> Deny
           </button>
           <button
-            onClick={() => onRespond(true)}
+            onClick={() => onRespond(true, 'session')}
             disabled={!agentRunning}
+            title="Approve every matching action for the rest of this session (until BLAXIN restarts)"
+            style={{
+              padding: '8px 12px', background: 'var(--bg-tertiary)',
+              color: 'var(--accent-yellow)', borderRadius: 'var(--radius-md)',
+              fontSize: 12, border: '1px solid rgba(255, 170, 0, 0.35)',
+              opacity: agentRunning ? 1 : 0.4,
+            }}
+          >
+            Approve session
+          </button>
+          <button
+            onClick={() => onRespond(true, 'task')}
+            disabled={!agentRunning}
+            title="Approve every matching action for the rest of this task"
+            style={{
+              padding: '8px 12px', background: 'var(--bg-tertiary)',
+              color: 'var(--accent-yellow)', borderRadius: 'var(--radius-md)',
+              fontSize: 12, border: '1px solid rgba(255, 170, 0, 0.35)',
+              opacity: agentRunning ? 1 : 0.4,
+            }}
+          >
+            Approve task
+          </button>
+          <button
+            onClick={() => onRespond(true, 'once')}
+            disabled={!agentRunning}
+            title="Approve this single action only"
             style={{
               display: 'flex', alignItems: 'center', gap: 6,
               padding: '8px 18px', background: 'linear-gradient(135deg, #ffaa00, #ff6600)',
@@ -153,6 +180,12 @@ export function ConfirmationModal({
           >
             <FiCheck size={12} /> Approve
           </button>
+        </div>
+        <div style={{
+          padding: '0 20px 12px', textAlign: 'right', fontSize: 10,
+          color: 'var(--text-muted)', fontFamily: 'var(--font-mono)',
+        }}>
+          Approve once · task (this task) · session (until restart)
         </div>
       </div>
     </div>

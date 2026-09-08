@@ -2,10 +2,11 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   ChatMessage, AgentState, AgentTask, TaskStep, AIResponse, ToolCall,
   ProviderId, AppConfig, ToolResult, Tool, ToolDefinition,
-  RiskTier, PermissionScope,
+  RiskTier, PermissionScope, GrantScope,
 } from '../types.js';
 import { providers, AIProvider, ProviderError } from '../providers/index.js';
 import { toolRegistry, riskFor } from '../tools/index.js';
+import { permissionKey, PermissionGrants } from '../utils/permission.js';
 import { logger } from '../utils/logger.js';
 import { getConfig, matchesAnyPattern } from '../utils/config.js';
 import { sessionState } from '../utils/session-state.js';
@@ -168,7 +169,11 @@ interface PendingCall {
   step: ExecutionStep;
 }
 
-type ToolOutcome = 'proceed' | 'denied';
+interface GateDecision {
+  outcome: 'proceed' | 'denied';
+  /** The scope under which this step was actually authorized. */
+  permissionScope: PermissionScope;
+}
 
 // ── Orchestrator ────────────────────────────────────────────────
 
@@ -196,8 +201,12 @@ export class AgentOrchestrator {
   private stopRequested = false;
 
   // Confirmation gate: high-impact tool calls wait for user approval.
-  private pendingConfirmations = new Map<string, (approved: boolean) => void>();
+  // The resolver carries the user's chosen scope (once/task/session).
+  private pendingConfirmations = new Map<string, (approved: boolean, scope: GrantScope) => void>();
   private readonly CONFIRMATION_TIMEOUT_MS = 120000;
+
+  // Scope grants (ALLOW_TASK / ALLOW_SESSION) — in-memory only.
+  private grants = new PermissionGrants();
 
   // Loop detection: N consecutive identical successful tool actions
   // indicate the agent is stuck repeating itself.
@@ -328,18 +337,18 @@ export class AgentOrchestrator {
    * Respond to a confirmation request from the agent UI.
    * Approval grants one high-impact tool execution; denial skips it.
    */
-  respondToConfirmation(stepId: string | undefined, approved: boolean): void {
+  respondToConfirmation(stepId: string | undefined, approved: boolean, scope: GrantScope = 'once'): void {
     if (!stepId) {
       // Deny-all fallback if no specific step matches.
-      for (const [, resolve] of this.pendingConfirmations) resolve(false);
+      for (const [, resolve] of this.pendingConfirmations) resolve(false, 'once');
       this.pendingConfirmations.clear();
       return;
     }
     const resolve = this.pendingConfirmations.get(stepId);
     if (resolve) {
       this.pendingConfirmations.delete(stepId);
-      resolve(approved);
-      logger.info('orchestrator', `Confirmation response for ${stepId}: ${approved ? 'approved' : 'denied'}`);
+      resolve(approved, scope);
+      logger.info('orchestrator', `Confirmation response for ${stepId}: ${approved ? `approved (${scope})` : 'denied'}`);
     }
   }
 
@@ -463,6 +472,8 @@ export class AgentOrchestrator {
         this.currentPlan.state = 'completed';
       }
     }
+    // ALLOW_TASK grants expire with their task; session grants persist.
+    this.grants.clearTask(this.currentTask?.id);
 
     const taskSteps = this.currentTask?.steps || [];
     const failedSteps = taskSteps.filter((s) => s.state === 'failed');
@@ -605,7 +616,7 @@ export class AgentOrchestrator {
 
     // Confirmation gate (identical policy to the LLM path).
     const decision = await this.checkConfirmationGate(pc, config);
-    if (decision === 'denied') {
+    if (decision.outcome === 'denied') {
       this.settleDenied(pc);
       this.completeDirectTask(action, null, true);
       return true;
@@ -621,7 +632,7 @@ export class AgentOrchestrator {
 
     // Record the tool outcome exactly like the LLM path would (step
     // state, tool-result history entry, progress events, loop detection).
-    this.settleResult(pc, result);
+    this.settleResult(pc, result, decision.permissionScope);
     this.completeDirectTask(action, result, false);
     return true;
   }
@@ -989,12 +1000,12 @@ export class AgentOrchestrator {
     if (!parallel) {
       const pc = wave[0];
       const decision = await this.checkConfirmationGate(pc, config);
-      if (decision === 'denied') {
+      if (decision.outcome === 'denied') {
         this.settleDenied(pc);
         return;
       }
       const result = await this.runTool(pc);
-      this.settleResult(pc, result);
+      this.settleResult(pc, result, decision.permissionScope);
       return;
     }
 
@@ -1006,7 +1017,9 @@ export class AgentOrchestrator {
     }
     const outcomes = await Promise.all(wave.map((pc) => this.runToolBody(pc)));
     for (let i = 0; i < wave.length; i++) {
-      this.settleResult(wave[i], outcomes[i]);
+      // Parallel waves are gate-free by construction (planWaves): the
+      // scope is ALWAYS_ALLOW unless a grant applied (handled upstream).
+      this.settleResult(wave[i], outcomes[i], 'ALWAYS_ALLOW');
     }
   }
 
@@ -1065,12 +1078,19 @@ export class AgentOrchestrator {
 
   /**
    * Check whether the tool call needs user approval and wait for the
-   * decision. Denied actions are skipped, never run.
+   * decision. Denied actions are skipped, never run. Returns the scope
+   * under which the step was actually authorized so the step journal and
+   * UI stay truthful.
    */
-  private async checkConfirmationGate(pc: PendingCall, config: AppConfig): Promise<ToolOutcome> {
+  private async checkConfirmationGate(pc: PendingCall, config: AppConfig): Promise<GateDecision> {
     const toolName = pc.call.function.name;
+    // A remembered grant (task/session) skips the prompt entirely.
+    const key = permissionKey(toolName, pc.args);
+    const granted = this.grants.effectiveFor(key, this.currentTask?.id);
+    if (granted) return { outcome: 'proceed', permissionScope: granted };
+
     if (!this.stepNeedsConfirmation(toolName, pc.args, config)) {
-      return 'proceed';
+      return { outcome: 'proceed', permissionScope: 'ALWAYS_ALLOW' };
     }
 
     const description = `Execute ${toolName}: ${pc.step.description}`;
@@ -1083,8 +1103,15 @@ export class AgentOrchestrator {
     });
     logger.info('orchestrator', `Confirmation required for ${toolName}`);
 
-    const approved = await this.requestConfirmation(pc.call.id, description, actionJson);
-    return approved ? 'proceed' : 'denied';
+    const { approved, scope } = await this.requestConfirmation(pc.call.id, description, actionJson);
+    if (!approved) {
+      return { outcome: 'denied', permissionScope: 'DENY' };
+    }
+    // Remember the approval beyond this single action when the user asked.
+    const effective: PermissionScope =
+      scope === 'once' ? 'ALLOW_ONCE' : scope === 'task' ? 'ALLOW_TASK' : 'ALLOW_SESSION';
+    this.grants.grant(key, scope, this.currentTask?.id);
+    return { outcome: 'proceed', permissionScope: effective };
   }
 
   /** Record a denied tool call as skipped (never executed). */
@@ -1170,12 +1197,14 @@ export class AgentOrchestrator {
   }
 
   /** Record the outcome of one tool call in deterministic order. */
-  private settleResult(pc: PendingCall, result: ToolResult): void {
+  private settleResult(pc: PendingCall, result: ToolResult, permissionScope?: PermissionScope): void {
     const { step, call, args } = pc;
     const toolName = call.function.name;
     step.state = result.success ? 'completed' : 'failed';
     step.result = result.output?.slice(0, 1000);
     step.error = result.error;
+    // The gate's decision is authoritative: reflect the scope it granted.
+    if (permissionScope) step.permissionScope = permissionScope;
     step.endTime = Date.now();
 
     this.emit('tool-execution', {
@@ -1288,16 +1317,16 @@ export class AgentOrchestrator {
    * Defaults to DENY when the request times out or the agent is stopped,
    * so dangerous operations never run silently.
    */
-  private requestConfirmation(stepId: string, description: string, action: string): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
+  private requestConfirmation(stepId: string, description: string, action: string): Promise<{ approved: boolean; scope: GrantScope }> {
+    return new Promise<{ approved: boolean; scope: GrantScope }>((resolve) => {
       let settled = false;
-      const settle = (approved: boolean) => {
+      const settle = (approved: boolean, scope: GrantScope = 'once') => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         this.pendingConfirmations.delete(stepId);
         this.setState('executing', approved ? 'Approved — continuing...' : 'Denied — skipping action');
-        resolve(approved);
+        resolve({ approved, scope });
       };
 
       this.pendingConfirmations.set(stepId, settle);
@@ -1400,6 +1429,8 @@ export class AgentOrchestrator {
     this.lastActionFingerprint = '';
     this.loopAbortReason = null;
     this.session.clearHistory();
+    // Clearing history also forgets all remembered approvals.
+    this.grants.clearAll();
     this.setState('idle');
     logger.info('orchestrator', 'History cleared');
   }
@@ -1408,7 +1439,7 @@ export class AgentOrchestrator {
     this.stopRequested = true;
     this.stepCount = this.configOf().agent.maxSteps; // Force exit loop
     // Deny any pending confirmations so waiting actions never execute.
-    for (const [, resolve] of this.pendingConfirmations) resolve(false);
+    for (const [, resolve] of this.pendingConfirmations) resolve(false, 'once');
     this.pendingConfirmations.clear();
     this.setState('idle', 'Stopped by user');
     if (this.runMetrics && this.runMetrics.outcome === 'completed') {

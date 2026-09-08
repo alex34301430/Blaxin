@@ -214,7 +214,7 @@ export function useWebSocket() {
     useAppStore.getState().setCurrentTask(null);
   }, [send]);
 
-  const respondToConfirmation = useCallback((approved: boolean) => {
+  const respondToConfirmation = useCallback((approved: boolean, scope: 'once' | 'task' | 'session' = 'once') => {
     const conf = useAppStore.getState().pendingConfirmation;
     if (!conf) return;
     send({
@@ -223,6 +223,8 @@ export function useWebSocket() {
         taskId: conf.taskId,
         stepId: conf.stepId,
         approved,
+        // once (default) | task (rest of this task) | session (until restart)
+        scope,
       },
     });
     useAppStore.getState().setPendingConfirmation(null);

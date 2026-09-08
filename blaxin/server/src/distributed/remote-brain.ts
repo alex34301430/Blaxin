@@ -19,7 +19,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { logger } from '../utils/logger.js';
 import { getConfig, matchesAnyPattern } from '../utils/config.js';
-import { toolRegistry, ToolRegistry } from '../tools/index.js';
+import { toolRegistry, ToolRegistry, riskFor } from '../tools/index.js';
+import { permissionKey, PermissionGrants } from '../utils/permission.js';
 import {
   CapabilitySet, ConnectionState, TaskActionRequest, ActionResult,
   PROTOCOL_MIN_SUPPORTED, PROTOCOL_MAX_SUPPORTED, WireMessage,
@@ -31,7 +32,7 @@ import { BodyLink } from './body-link.js';
 import { BodyState, CachedActionResult, MAX_CACHED_OUTPUT_CHARS } from './body-state.js';
 import { capabilitiesFromTools, toolAllowedByCapabilities } from './capabilities.js';
 import { CLOSE } from './handshake.js';
-import type { AgentState, AgentTask, TaskStep, ToolResult } from '../types.js';
+import type { AgentState, AgentTask, TaskStep, ToolResult, PermissionScope, GrantScope } from '../types.js';
 import { budgetAssistantMessage } from '../utils/context-budget.js';
 
 type EventCallback = (event: string, data: any) => void;
@@ -85,7 +86,9 @@ export class RemoteBrainDriver {
   private connectedAt: number | null = null;
 
   // Confirmation gate (parallel to the local orchestrator's).
-  private pendingConfirmations = new Map<string, (approved: boolean) => void>();
+  private pendingConfirmations = new Map<string, (approved: boolean, scope: GrantScope) => void>();
+  /** Scope grants (ALLOW_TASK / ALLOW_SESSION) — in-memory only. */
+  private grants = new PermissionGrants();
   private pendingAuthChallenges = new Map<string, string>(); // our challenge → expected brain sig
 
   // Active remote task mirror for the UI.
@@ -248,21 +251,23 @@ export class RemoteBrainDriver {
   clearHistory(): void {
     // Conversation history lives on the Brain in external mode. The UI
     // history is cleared locally; nothing to delete on the Brain.
+    // Clearing history also forgets all remembered approvals.
+    this.grants.clearAll();
     this.clearTask('History cleared');
   }
 
   /** Handle a UI confirmation verdict (mirrors orchestrator API). */
-  respondToConfirmation(stepId: string | undefined, approved: boolean): void {
+  respondToConfirmation(stepId: string | undefined, approved: boolean, scope: GrantScope = 'once'): void {
     if (!stepId) {
-      for (const [, resolve] of this.pendingConfirmations) resolve(false);
+      for (const [, resolve] of this.pendingConfirmations) resolve(false, 'once');
       this.pendingConfirmations.clear();
       return;
     }
     const resolve = this.pendingConfirmations.get(stepId);
     if (resolve) {
       this.pendingConfirmations.delete(stepId);
-      resolve(approved);
-      logger.info('remote-brain', `Confirmation for ${stepId}: ${approved ? 'approved' : 'denied'}`);
+      resolve(approved, scope);
+      logger.info('remote-brain', `Confirmation for ${stepId}: ${approved ? `approved (${scope})` : 'denied'}`);
     }
   }
 
@@ -686,10 +691,15 @@ export class RemoteBrainDriver {
       });
     }
 
-    // 4 — confirmation gate (same policy as the local orchestrator).
+    // 4 — confirmation gate (same policy as the local orchestrator). A
+    // remembered grant (task/session) skips the prompt; the scope the user
+    // chose is recorded on the step either way.
     const needsConfirm = this.needsConfirmation(req);
-    if (needsConfirm) {
-      const approved = await this.requestConfirmation(req);
+    const key = permissionKey(req.action.tool, req.action.args);
+    const granted = this.grants.effectiveFor(key, req.taskId);
+    let stepScope: PermissionScope = 'ALWAYS_ALLOW';
+    if (needsConfirm && !granted) {
+      const { approved, scope } = await this.requestConfirmation(req);
       if (!approved) {
         const denied: CachedActionResult = {
           actionId: req.actionId, taskId: req.taskId, tool: req.action.tool,
@@ -700,18 +710,22 @@ export class RemoteBrainDriver {
         this.state.cacheAction(denied);
         return { ...base, outcome: 'denied', executed: false, replay: false, error: 'Action denied by user' };
       }
+      stepScope = scope === 'once' ? 'ALLOW_ONCE' : scope === 'task' ? 'ALLOW_TASK' : 'ALLOW_SESSION';
+      this.grants.grant(key, scope, req.taskId);
+    } else if (granted) {
+      stepScope = granted;
     }
 
     // 5 — execute (with bounded retries for transient failures).
     const config = this.configOf();
     const maxRetries = Math.max(0, Math.min(MAX_ACTION_RETRIES, config.agent.maxRetries - 1));
-    let result = await this.runTool(req);
+    let result = await this.runTool(req, stepScope);
     let attempts = 0;
     while (!result.success && attempts < maxRetries && this.isRetryable(result.error || '')) {
       attempts++;
       logger.info('remote-brain', `Retrying ${req.action.tool} (attempt ${attempts + 1})`);
       await this.sleep(1000 * attempts);
-      result = await this.runTool(req);
+      result = await this.runTool(req, stepScope);
     }
 
     // 6 — persist the outcome BEFORE returning (crash-safe dedupe).
@@ -752,15 +766,15 @@ export class RemoteBrainDriver {
     return false;
   }
 
-  private requestConfirmation(req: TaskActionRequest): Promise<boolean> {
-    return new Promise<boolean>((resolve) => {
+  private requestConfirmation(req: TaskActionRequest): Promise<{ approved: boolean; scope: GrantScope }> {
+    return new Promise<{ approved: boolean; scope: GrantScope }>((resolve) => {
       let settled = false;
-      const settle = (approved: boolean) => {
+      const settle = (approved: boolean, scope: GrantScope = 'once') => {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
         this.pendingConfirmations.delete(req.actionId);
-        resolve(approved);
+        resolve({ approved, scope });
       };
       this.pendingConfirmations.set(req.actionId, settle);
       const actionJson = JSON.stringify({ tool: req.action.tool, args: req.action.args });
@@ -777,7 +791,7 @@ export class RemoteBrainDriver {
     });
   }
 
-  private async runTool(req: TaskActionRequest): Promise<ToolResult> {
+  private async runTool(req: TaskActionRequest, permissionScope?: PermissionScope): Promise<ToolResult> {
     if (this.task && this.task.id === req.taskId) {
       const existing = this.task.steps.find((s) => s.id === req.actionId);
       if (!existing) {
@@ -787,6 +801,8 @@ export class RemoteBrainDriver {
           toolName: req.action.tool,
           toolArgs: req.action.args,
           state: 'executing',
+          riskTier: riskFor(req.action.tool, req.action.args, this.configOf()),
+          permissionScope,
         } as TaskStep);
         this.task.currentStep = this.task.steps.length;
       }
@@ -835,6 +851,8 @@ export class RemoteBrainDriver {
     const p = msg.payload || {};
     const taskId = typeof p.taskId === 'string' ? p.taskId : '';
     const summary = typeof p.summary === 'string' ? p.summary : '';
+    // ALLOW_TASK grants expire with their task.
+    this.grants.clearTask(taskId);
     if (this.task && this.task.id === taskId) {
       this.task.state = 'completed';
       this.task.endTime = Date.now();
@@ -855,6 +873,8 @@ export class RemoteBrainDriver {
     const taskId = typeof p.taskId === 'string' ? p.taskId : '';
     const error = typeof p.error === 'string' ? p.error : 'The Brain could not complete the task';
     const code = typeof p.code === 'string' ? p.code : 'TASK_FAILED';
+    // ALLOW_TASK grants expire with their task.
+    this.grants.clearTask(taskId);
     if (this.task && this.task.id === taskId) {
       this.task.state = 'error';
       this.task.error = error;
@@ -870,7 +890,7 @@ export class RemoteBrainDriver {
 
   private clearTask(reason: string): void {
     this.task = null;
-    for (const [, resolve] of this.pendingConfirmations) resolve(false);
+    for (const [, resolve] of this.pendingConfirmations) resolve(false, 'once');
     this.pendingConfirmations.clear();
     this.emit('agent-state', { state: 'idle', description: reason });
   }

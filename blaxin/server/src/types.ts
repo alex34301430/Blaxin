@@ -124,6 +124,9 @@ export type PermissionScope =
   | 'ALLOW_SESSION'  // approved for this session
   | 'DENY';          // denied by the user (never executed)
 
+/** Scope chosen by the user when approving a confirmation request. */
+export type GrantScope = 'once' | 'task' | 'session';
+
 export type AgentState = 
   | 'idle'
   | 'thinking'
