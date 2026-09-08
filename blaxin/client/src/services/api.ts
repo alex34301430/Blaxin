@@ -58,6 +58,29 @@ export interface MetricsResponse {
   tasks: MetricsTask[];
 }
 
+// ── Live system telemetry ─────────────────────────────────────
+
+export interface SystemTelemetry {
+  timestamp: number;
+  cpu: {
+    usagePercent: number;
+    cores: number;
+    model: string | null;
+    loadAvg: { one: number; five: number; fifteen: number };
+  };
+  memory: { totalBytes: number; usedBytes: number; freeBytes: number; percent: number };
+  disk: { totalBytes: number; usedBytes: number; percent: number; mount: string } | null;
+  uptimeSec: number;
+  os: { platform: string; release: string; arch: string; hostname: string };
+  nodeVersion: string;
+}
+
+export interface CapabilityInfo {
+  name: string;
+  description: string;
+  enabled: boolean;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
@@ -311,6 +334,18 @@ export const api = {
 
   // Diagnostics
   diagnostics: () => fetchAPI<any>('/diagnostics'),
+
+  // Live system telemetry
+  getSystemTelemetry: () => fetchAPI<SystemTelemetry>('/system/telemetry'),
+
+  // Capabilities (tools + enabled state)
+  getCapabilities: async (): Promise<CapabilityInfo[]> => {
+    const [tools, status] = await Promise.all([
+      fetchAPI<Array<{ name: string; description: string }>>('/tools'),
+      fetchAPI<Record<string, boolean>>('/tools/status'),
+    ]);
+    return tools.map((t) => ({ name: t.name, description: t.description, enabled: status[t.name] ?? false }));
+  },
 
   // Performance metrics
   metrics: (n?: number) =>

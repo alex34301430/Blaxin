@@ -10,6 +10,7 @@ import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { MetricsPage } from './pages/MetricsPage';
 import { BrainPage } from './pages/BrainPage';
 import { ModelsPage } from './pages/ModelsPage';
+import { SystemPage } from './pages/SystemPage';
 import { SetupWizard } from './components/SetupWizard';
 import { UpdateNotifier } from './components/UpdateNotifier';
 import { useAppStore } from './utils/store';
@@ -121,6 +122,10 @@ export default function App() {
 
         {currentPage === 'brain' && (
           <BrainPage />
+        )}
+
+        {currentPage === 'system' && (
+          <SystemPage />
         )}
       </main>
 

@@ -9,6 +9,48 @@
 
 Historical sessions below are kept for context (v1.1.1-era notes are superseded — v1.2.0 shipped multi-body registry, local models, OCI, distributed Brain).
 
+## PHASE 3 — LIVE SYSTEM TELEMETRY + CAPABILITIES PANELS (2026-09-08)
+
+### What / Why
+JARVIS command-center building blocks: a live System page showing REAL hardware state (CPU % via tick deltas, RAM, disk via statfs/df fallback, load, uptime, OS/hostname/node) and a Capabilities panel listing every tool with its enabled state. Polling is bounded (5s) and only runs while the page is mounted — nothing in the background elsewhere.
+
+### Changes
+- `server/src/utils/system-telemetry.ts` (NEW): dependency-free `getSystemTelemetry()` — os.cpus() delta for CPU %, os.totalmem/freemem, statfsSync with df -kP fallback, loadavg, uptime, os info.
+- `server/src/index.ts`: `GET /api/system/telemetry` (behind the existing /api origin guard).
+- `client/src/services/api.ts`: `getSystemTelemetry()` + `getCapabilities()` (tools + enabled status).
+- `client/src/hooks/useSystemTelemetry.ts` (NEW): 5s poll while mounted, cleaned up on unmount.
+- `client/src/pages/SystemPage.tsx` (NEW): telemetry panel (color-coded CPU/RAM/DISK bars, info chips) + capabilities panel (icon, name, description, enabled check).
+- `client/src/App.tsx` + `Sidebar.tsx`: new System nav page (FiMonitor).
+- `server/src/__tests__/system-telemetry.test.ts` (NEW): 2 tests — real bounded values, stable CPU over consecutive calls.
+
+### Evidence
+- Server tsc clean; server suite **341 passed / 1 skipped** (+2). Client tsc clean; client build clean.
+- **Live-verified** against the real backend: `/api/system/telemetry` returned real readings — cpu 12%→21% (real deltas), 8 cores, i5-8350U, RAM 50% (8 GB machine), disk 62% (mount /home/tsn), uptime, kali/x64; `/api/tools` + `/api/tools/status` list all 8 capabilities enabled. Server + temp state cleaned up; port 3199 free.
+
+### Remaining
+- Uncommitted (together with Phase 4b scope semantics — both milestones in the working tree, awaiting commit approval).
+
+## PHASE 4b — ALLOW_TASK / ALLOW_SESSION SCOPE SEMANTICS (2026-09-08)
+
+### What / Why
+The confirmation gate now honors the scope the user chooses when approving: once (default), task (rest of the current task), or session (until restart). Matching actions within scope skip the prompt; the step journal records the actual scope. Previously ALLOW_TASK/ALLOW_SESSION were typed but unimplemented.
+
+### Changes
+- `server/src/utils/permission.ts` (NEW): `permissionKey(tool, args)` (filesystem grants scoped per operation) + `PermissionGrants` (in-memory ALLOW_TASK/ALLOW_SESSION store; task grants expire with their task; never persisted).
+- `server/src/orchestrator/index.ts`: gate returns a `GateDecision {outcome, permissionScope}`; grants checked before prompting; approval scope stored; task grants cleared in finishRunTask; session grants cleared in clearHistory; settleResult records the granted scope.
+- `server/src/distributed/remote-brain.ts` (Body side, external mode): identical gate semantics + grants; distributed task steps now also carry riskTier + permissionScope; grants cleared on task complete/failed/clearHistory.
+- `server/src/index.ts`: `confirmation-response` accepts optional `scope` (once/task/session, validated).
+- `client/src/hooks/useWebSocket.ts`: sends the chosen scope.
+- `client/src/components/ConfirmationModal.tsx`: Approve / Approve task / Approve session / Deny buttons with scope tooltips + hint line.
+- `server/src/__tests__/permission-grants.test.ts` (NEW): 13 tests — permissionKey, grants lifecycle, orchestrator integration (once→asked again, task→auto within task, task grant expires across tasks, session→persists across tasks, clearHistory forgets session, fast path honors grants).
+
+### Evidence
+- Server tsc clean; server suite **339 passed / 1 skipped** (+13). Client tsc clean; client build clean.
+- Scope semantics verified deterministically through the real orchestrator/Body gate code (provider + tools faked, gate/grants/UI-wire real). Live-LLM run NOT possible here (no provider); the WS wire change is type-checked and the confirmation-response path was previously live-verified in Phase 2 probes.
+
+### Remaining
+- Uncommitted (awaiting approval).
+
 ## PHASE 4a — RISK TIER + PERMISSION SCOPE PER STEP (2026-09-08)
 
 ### What / Why

@@ -23,6 +23,7 @@ import {
 import { isVersionNewer, isMajorVersionUpgrade } from './utils/semver.js';
 import { isValidUserMessage, normalizeUserMessage } from './utils/validation.js';
 import { APP_VERSION, GITHUB_REPO, GITHUB_RELEASES_URL } from './utils/version.js';
+import { getSystemTelemetry } from './utils/system-telemetry.js';
 import { dataPath } from './utils/paths.js';
 import { loadOrCreateIdentity } from './distributed/identity.js';
 import { RemoteBrainDriver } from './distributed/remote-brain.js';
@@ -257,6 +258,16 @@ app.get('/api/metrics', (req, res) => {
     summary: telemetry.summary(n),
     tasks: telemetry.latest(n).map((t) => ({ ...t, message: undefined })),
   });
+});
+
+// Live system telemetry (real CPU/RAM/disk/uptime — see system-telemetry.ts)
+app.get('/api/system/telemetry', async (_req, res) => {
+  try {
+    res.json(await getSystemTelemetry());
+  } catch (error: any) {
+    logger.error('telemetry', `Failed to read system telemetry: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Diagnostics

@@ -11,6 +11,7 @@ const navItems = [
   { id: 'terminal', icon: FiTerminal, label: 'Terminal' },
   { id: 'metrics', icon: FiBarChart2, label: 'Metrics' },
   { id: 'diagnostics', icon: FiHeart, label: 'Diagnostics' },
+  { id: 'system', icon: FiMonitor, label: 'System' },
   { id: 'models', icon: FiCpu, label: 'Models' },
   { id: 'brain', icon: FiLink, label: 'Brain' },
 ];
