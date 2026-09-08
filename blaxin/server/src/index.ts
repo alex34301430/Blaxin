@@ -12,7 +12,7 @@ import { loadConfig, saveConfig } from './utils/config.js';
 import { credentialStore } from './utils/credentials.js';
 import { runDiagnostics } from './utils/diagnostics.js';
 import { sessionState } from './utils/session-state.js';
-import { memoryStore } from './utils/memory.js';
+import { memoryStore, MemoryType, MemoryEntry, looksSensitive } from './utils/memory.js';
 import { telemetry, parseMetricsLimit } from './utils/telemetry.js';
 import {
   corsOriginValidator,
@@ -489,6 +489,37 @@ app.get('/api/memory', (req, res) => {
   const type = (req.query.type as string) || undefined;
   const entries = memoryStore.search(query, (type as any) || undefined);
   res.json(entries);
+});
+
+// Explicitly store a durable note (preference/fact/project/lesson). The
+// store refuses secret-like content and never persists credentials.
+app.post('/api/memory', (req, res) => {
+  const { type, content, source, scope } = (req.body || {}) as Record<string, unknown>;
+  const types: MemoryType[] = ['preference', 'fact', 'project', 'action-result'];
+  if (typeof type !== 'string' || !types.includes(type as MemoryType)) {
+    return res.status(400).json({ error: 'type must be one of preference, fact, project, action-result', code: 'BAD_TYPE' });
+  }
+  const text = typeof content === 'string' ? content.trim() : '';
+  if (!text || text.length > 2000) {
+    return res.status(400).json({ error: 'content must be a non-empty string of at most 2000 characters', code: 'BAD_CONTENT' });
+  }
+  if (source !== undefined && source !== 'user' && source !== 'agent' && source !== 'system') {
+    return res.status(400).json({ error: 'source must be user, agent or system', code: 'BAD_SOURCE' });
+  }
+  const cleanScope = typeof scope === 'string' && scope.trim() ? scope.trim().slice(0, 80) : undefined;
+
+  if (looksSensitive(text)) {
+    return res.status(422).json({
+      error: 'That content looks like a secret (API key / token / private key) and was not stored.',
+      code: 'SECRET_REFUSED',
+    });
+  }
+
+  const entry = memoryStore.add(type as MemoryType, text, {
+    source: (source as MemoryEntry['source']) || 'user',
+    scope: cleanScope,
+  });
+  res.json({ success: true, entry });
 });
 
 app.delete('/api/memory/:id', (req, res) => {

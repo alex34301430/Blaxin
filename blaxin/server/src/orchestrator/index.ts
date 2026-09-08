@@ -10,7 +10,7 @@ import { permissionKey, PermissionGrants } from '../utils/permission.js';
 import { logger } from '../utils/logger.js';
 import { getConfig, matchesAnyPattern } from '../utils/config.js';
 import { sessionState } from '../utils/session-state.js';
-import { memoryStore, MemoryType } from '../utils/memory.js';
+import { memoryStore, MemoryType, MemoryEntry, formatMemoryContext } from '../utils/memory.js';
 import { classifyDirect, DirectAction } from '../router/direct.js';
 import {
   budgetToolResultOutput, budgetAssistantMessage,
@@ -60,6 +60,8 @@ export interface SessionStateLike {
 
 export interface MemoryStoreLike {
   add(type: MemoryType, content: string, options?: { source?: 'user' | 'agent' | 'system'; scope?: string }): unknown;
+  /** Read entries back so durable memory can inform future tasks. */
+  search?(query?: string): MemoryEntry[];
 }
 
 export interface OrchestratorDeps {
@@ -857,13 +859,29 @@ export class AgentOrchestrator {
       {
         id: 'system',
         role: 'system',
-        content: SYSTEM_PROMPT + this.getTaskContext(),
+        content: SYSTEM_PROMPT + this.getTaskContext() + this.getDurableMemoryContext(),
         timestamp: Date.now(),
       },
       ...recentHistory,
     ];
 
     return messages;
+  }
+
+  /**
+   * Durable memory read-back (Phase 6): preferences/facts/project notes
+   * plus recent failure lessons from EARLIER tasks, formatted so they are
+   * framed as background data that the current instruction outranks.
+   * Returns '' when the store is empty or has no read API.
+   */
+  private getDurableMemoryContext(): string {
+    if (!this.memory.search) return '';
+    try {
+      return formatMemoryContext(this.memory.search());
+    } catch (error: any) {
+      logger.warn('orchestrator', `Failed to read memory context: ${error.message}`);
+      return '';
+    }
   }
 
   private getTaskContext(): string {

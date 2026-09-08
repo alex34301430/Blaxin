@@ -9,6 +9,29 @@
 
 Historical sessions below are kept for context (v1.1.1-era notes are superseded — v1.2.0 shipped multi-body registry, local models, OCI, distributed Brain).
 
+## PHASE 6 — MEMORY READ-BACK + MEMORY MANAGEMENT (2026-09-08)
+
+### What / Why
+The audit found the memory system was write-only from the agent's perspective: failure lessons were stored but NEVER read back, durable preferences/facts could not be recorded or managed by the user, and no UI existed. This phase closes the loop without a second memory system.
+
+### Changes
+- `server/src/utils/memory.ts`: `formatMemoryContext()` — bounded, categorized rendering of durable notes (preference/fact/project) + recent failure lessons, framed explicitly as BACKGROUND DATA the current instruction outranks (defaults 8 durable / 3 lessons / 200 chars per line).
+- `server/src/orchestrator/index.ts`: system prompt now appends `getDurableMemoryContext()` on every model call; `MemoryStoreLike` gains optional `search()`; read failures degrade to ''.
+- `server/src/index.ts`: `POST /api/memory` — validated explicit note creation (type whitelist, content ≤2000, secret-like content refused with 422 SECRET_REFUSED).
+- `client/src/pages/MemoryPage.tsx` (NEW): inspect/search/delete/clear notes, type badges (preference/fact/project/lesson), add-note form, secret-refusal + subordination hints.
+- `client/src/services/api.ts`: typed `MemoryEntry`, `getMemory(q)`, `addMemory`, `deleteMemory`.
+- `client/src/App.tsx` + `Sidebar.tsx`: Memory nav page (FiDatabase).
+- Tests: `memory-context.test.ts` (6 unit tests) + `memory-readback.test.ts` (2 orchestrator integration tests — memory reaches the provider system prompt when present, nothing injected when empty).
+
+### Evidence
+- Server tsc clean; client build clean.
+- Server suite **349 passed / 1 skipped** (+8).
+- **Live-verified** against a scratch backend (port 3199, scratch data dir): POST preference/project → stored; secret-like content → 422; bad type → 400; GET + ?q= filter; DELETE by id; full restart → surviving entry reloaded from disk (persistence). Scratch server + data cleaned up; port free.
+- Live LLM read-back NOT exercised (no provider key here); deterministic orchestrator tests cover the injection path.
+
+### Remaining
+- Committed. External/distributed Brain mode still has no memory read/write on the Body side (Brain host owns its own prompt); deferred — unverifiable live in this environment.
+
 ## PHASE 5 — VOICE POLISH + JARVIS AUDIO IDENTITY (2026-09-08)
 
 ### What / Why

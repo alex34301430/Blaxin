@@ -3,7 +3,7 @@ import { useAppStore } from '../utils/store';
 import {
   FiMessageSquare, FiSettings, FiCpu, FiPower,
   FiTerminal, FiMonitor, FiShield, FiInfo,
-  FiActivity, FiHeart, FiBarChart2, FiLink,
+  FiActivity, FiHeart, FiBarChart2, FiLink, FiDatabase,
 } from 'react-icons/fi';
 
 const navItems = [
@@ -12,6 +12,7 @@ const navItems = [
   { id: 'metrics', icon: FiBarChart2, label: 'Metrics' },
   { id: 'diagnostics', icon: FiHeart, label: 'Diagnostics' },
   { id: 'system', icon: FiMonitor, label: 'System' },
+  { id: 'memory', icon: FiDatabase, label: 'Memory' },
   { id: 'models', icon: FiCpu, label: 'Models' },
   { id: 'brain', icon: FiLink, label: 'Brain' },
 ];

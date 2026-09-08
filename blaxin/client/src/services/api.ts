@@ -81,6 +81,18 @@ export interface CapabilityInfo {
   enabled: boolean;
 }
 
+export type MemoryType = 'preference' | 'fact' | 'project' | 'action-result';
+
+export interface MemoryEntry {
+  id: string;
+  type: MemoryType;
+  content: string;
+  source: 'user' | 'agent' | 'system';
+  createdAt: number;
+  lastUsedAt: number;
+  scope?: string;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
@@ -393,8 +405,15 @@ export const api = {
     }),
 
   // Memory
-  getMemory: () => fetchAPI<Array<any>>('/memory'),
-  clearMemory: () => fetchAPI('/memory', { method: 'DELETE' }),
+  getMemory: (q?: string) => fetchAPI<MemoryEntry[]>(`/memory${q ? `?q=${encodeURIComponent(q)}` : ''}`),
+  addMemory: (input: { type: string; content: string; scope?: string }) =>
+    fetchAPI<{ success: boolean; entry?: MemoryEntry }>('/memory', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  deleteMemory: (id: string) =>
+    fetchAPI<{ success: boolean }>(`/memory/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  clearMemory: () => fetchAPI<{ success: boolean }>('/memory', { method: 'DELETE' }),
 
   // Agent
   sendMessage: (message: string) =>

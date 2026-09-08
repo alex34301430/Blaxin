@@ -10,6 +10,7 @@ import {
   AIResponse, AppConfig, ChatMessage, ModelInfo, ProviderId, Tool,
   ToolCall, ToolDefinition, ToolResult,
 } from '../../types.js';
+import { MemoryEntry } from '../../utils/memory.js';
 import { AIProvider } from '../../providers/base.js';
 import { ToolRegistryLike, SessionStateLike, MemoryStoreLike, ProviderRegistryLike } from '../../orchestrator/index.js';
 
@@ -52,6 +53,8 @@ export class FakeProvider extends AIProvider {
   script: ScriptedTurn[] = [];
   calls = 0;
   latencyMs = 0;
+  /** Messages from the most recent chat() call (for prompt assertions). */
+  lastMessages: ChatMessage[] = [];
 
   constructor(latencyMs = 0) {
     super();
@@ -79,6 +82,7 @@ export class FakeProvider extends AIProvider {
     temperature?: number;
   }): Promise<AIResponse> {
     this.calls++;
+    this.lastMessages = request.messages;
     if (this.latencyMs > 0) {
       await new Promise((r) => setTimeout(r, this.latencyMs));
     }
@@ -209,10 +213,13 @@ export class FakeSession implements SessionStateLike {
 }
 
 export class FakeMemory implements MemoryStoreLike {
-  entries: unknown[] = [];
+  entries: Array<{ type: string; content: string; source?: string; scope?: string; lastUsedAt?: number }> = [];
   add(type: string, content: string): unknown {
-    this.entries.push({ type, content });
+    this.entries.push({ type, content, lastUsedAt: Date.now() });
     return null;
+  }
+  search(): MemoryEntry[] {
+    return this.entries as unknown as MemoryEntry[];
   }
 }
 
