@@ -34,6 +34,7 @@ import { capabilitiesFromTools, toolAllowedByCapabilities } from './capabilities
 import { CLOSE } from './handshake.js';
 import type { AgentState, AgentTask, TaskStep, ToolResult, PermissionScope, GrantScope } from '../types.js';
 import { budgetAssistantMessage } from '../utils/context-budget.js';
+import { memoryStore, formatMemoryContext } from '../utils/memory.js';
 
 type EventCallback = (event: string, data: any) => void;
 
@@ -59,6 +60,9 @@ export interface RemoteBrainOptions {
    * the module constants; see BodyLinkOptions. */
   heartbeatIntervalMs?: number;
   heartbeatTimeoutMs?: number;
+  /** Overridable durable-memory provider (defaults to the local memory
+   * store). Returning '' means no memory context is sent with tasks. */
+  memoryProvider?: () => string;
 }
 
 const CONFIRMATION_TIMEOUT_MS = 120_000;
@@ -74,6 +78,7 @@ export class RemoteBrainDriver {
   private readonly configOf: NonNullable<RemoteBrainOptions['getConfig']>;
   private readonly eventCallback: EventCallback | null;
   private readonly capabilities: CapabilitySet;
+  private readonly memoryProvider: RemoteBrainOptions['memoryProvider'];
 
   private phase: Phase = 'idle';
   private brainId: string | null = null;
@@ -103,6 +108,7 @@ export class RemoteBrainDriver {
     this.tools = options.toolRegistry ?? toolRegistry;
     this.configOf = options.getConfig ?? getConfig;
     this.eventCallback = options.onEvent ?? null;
+    this.memoryProvider = options.memoryProvider;
     this.capabilities = capabilitiesFromTools(
       (options.toolRegistry ?? toolRegistry).getToolDefinitions().map((t) => t.function.name),
     );
@@ -126,6 +132,28 @@ export class RemoteBrainDriver {
   }
 
   // ── Public API (used by the server + UI-facing endpoints) ─────
+
+  /**
+   * Durable-memory read-back for external tasks: preferences/facts/
+   * lessons recorded on this Body travel with each task_start so the
+   * Brain can act on them (framed as background data that the current
+   * instruction outranks). Overridable so tests can inject memory
+   * without touching the on-disk store.
+   */
+  private getMemoryContext(): string {
+    if (this.memoryProvider) {
+      try {
+        return String(this.memoryProvider() || '').slice(0, 6000);
+      } catch {
+        return '';
+      }
+    }
+    try {
+      return formatMemoryContext(memoryStore.search()).slice(0, 6000);
+    } catch {
+      return '';
+    }
+  }
 
   /** Begin connecting (with an optional pairing code for first contact). */
   connect(pairingCode?: string): void {
@@ -228,7 +256,8 @@ export class RemoteBrainDriver {
       currentStep: 0,
       startTime: Date.now(),
     };
-    const sent = this.link.sendAs('task_start', { text, taskId });
+    const memoryContext = this.getMemoryContext() || undefined;
+    const sent = this.link.sendAs('task_start', { text, taskId, memoryContext });
     if (!sent) {
       this.clearTask('Send failed');
       this.emit('error', { message: 'Failed to reach the Brain.', code: 'BRAIN_OFFLINE' });

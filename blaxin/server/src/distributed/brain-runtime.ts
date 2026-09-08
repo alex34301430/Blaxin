@@ -125,6 +125,8 @@ interface TaskSession {
   driverId: string;
   state: string;
   description?: string;
+  /** Durable memory context sent by the Body with task_start (optional). */
+  memoryContext?: string;
   startTime: number;
   active: boolean;
   cancelRequested?: boolean;
@@ -1137,11 +1139,17 @@ export class BrainRuntime {
       ? suggestedTaskId
       : uuidv4();
 
+    // Body durable memory (already framed as background data; bounded).
+    const memoryContext = typeof p.memoryContext === 'string' && p.memoryContext.trim()
+      ? p.memoryContext.slice(0, 6000)
+      : undefined;
+
     const session: TaskSession = {
       taskId,
       text,
       driverId,
       state: 'planning',
+      memoryContext,
       startTime: this.now(),
       active: true,
     };
@@ -1161,6 +1169,7 @@ export class BrainRuntime {
     const ctx = {
       taskId: session.taskId,
       text: session.text,
+      memoryContext: session.memoryContext,
       bodyId,
       bodyName: peer.bodyName,
       capabilities: capabilitySnapshot,

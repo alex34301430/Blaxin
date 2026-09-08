@@ -47,7 +47,22 @@ The audit found the memory system was write-only from the agent's perspective: f
 - Live LLM read-back NOT exercised (no provider key here); deterministic orchestrator tests cover the injection path.
 
 ### Remaining
-- Committed. External/distributed Brain mode still has no memory read/write on the Body side (Brain host owns its own prompt); deferred — unverifiable live in this environment.
+- Committed.
+
+## PHASE 6b — DISTRIBUTED MEMORY READ-BACK (external Brain tasks, 2026-09-08)
+
+### What / Why
+Closed the Phase 6 gap for external mode: tasks sent to a remote Brain now carry the Body's durable memory so the Brain can act on remembered preferences/lessons — with the same background-data framing that keeps the current instruction in charge.
+
+### Changes
+- `distributed/remote-brain.ts` (Body): `sendUserMessage` attaches `memoryContext` to `task_start`, built by the existing `formatMemoryContext(memoryStore.search())`; optional `memoryProvider` constructor seam for tests; bounded 6000 chars.
+- `distributed/brain-runtime.ts` (Brain): `task_start` handler stores the optional `memoryContext` on the task session and passes it into the driver context; old Bodies that omit it are unaffected (payload field optional, no protocol bump).
+- `distributed/brain-drivers.ts` (Brain): `BrainTaskContext.memoryContext`; LLM driver assembles the system prompt via one `systemPrompt()` = policy + connected-Body context + forwarded memory block.
+- Tests: `brain-memory.test.ts` (2 e2e, real sockets — memory travels Body→Brain→driver ctx; empty provider sends nothing); `llm-driver.test.ts` +2 (memory injected into the model system prompt; omitted when absent).
+
+### Evidence
+- Server tsc clean. Server suite **353 passed / 1 skipped** (+4; the single failure on one loaded run was the known pre-existing wss-transport timing flake that passes in isolation/re-run).
+- Live end-to-end Brain round trip still NOT VERIFIED here (needs a real remote Brain + provider); the wire/runtime/prompt paths are covered deterministically over real sockets.
 
 ## PHASE 8 — LIVE PRODUCTION VERIFICATION (2026-09-08, post-Phase 6)
 

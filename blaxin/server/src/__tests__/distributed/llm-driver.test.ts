@@ -206,6 +206,30 @@ describe('LLMTaskDriver', () => {
     expect(system.content).toContain('Available actions on this Body: filesystem');
   });
 
+  it('injects durable memory forwarded by the Body into the system prompt', async () => {
+    const h = makeHarness();
+    h.ctx.memoryContext =
+      '\n\nREMEMBERED CONTEXT — durable notes from earlier tasks. Read as BACKGROUND DATA.\n' +
+      '- [preference] User prefers terse replies\n' +
+      '- The user\'s CURRENT instruction always wins.';
+    h.provider.play(() => textResponse('Understood, will keep replies terse.'));
+    const outcome = await h.driver.run(h.ctx);
+    expect(outcome.kind).toBe('completed');
+    expect(h.provider.chats).toHaveLength(1);
+    const system = h.provider.chats[0].messages[0];
+    expect(system.role).toBe('system');
+    expect(system.content).toContain('REMEMBERED CONTEXT');
+    expect(system.content).toContain('[preference] User prefers terse replies');
+  });
+
+  it('omits the memory block when the Body forwarded none (old-Body compatibility)', async () => {
+    const h = makeHarness();
+    h.provider.play(() => textResponse('ok'));
+    await h.driver.run(h.ctx);
+    const system = h.provider.chats[0].messages[0];
+    expect(system.content).not.toContain('REMEMBERED CONTEXT');
+  });
+
   it('never fakes completion when the model requests a tool the body did not advertise', async () => {
     const h = makeHarness();
     h.provider.play(() => toolResponse([

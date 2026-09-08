@@ -34,6 +34,9 @@ export interface BrainTaskContext {
   taskId: string;
   /** The user's request text (forwarded by the Body). */
   text: string;
+  /** Durable memory forwarded by the Body (already framed as background
+   * data; optional — old Bodies simply omit it). */
+  memoryContext?: string;
   bodyId: string;
   bodyName: string;
   capabilities: CapabilitySet;
@@ -294,7 +297,7 @@ export class LLMTaskDriver implements BrainTaskDriver {
               {
                 id: 'system',
                 role: 'system',
-                content: BRAIN_SYSTEM_PROMPT + this.describeBody(ctx),
+                content: this.systemPrompt(ctx),
                 timestamp: Date.now(),
               },
               ...history,
@@ -409,6 +412,22 @@ export class LLMTaskDriver implements BrainTaskDriver {
     if (ctx.tools.length === 0) return '';
     const names = ctx.tools.map((t) => t.function.name).join(', ');
     return `\n\nCONNECTED BODY: ${ctx.bodyName} (${ctx.bodyId}) with capabilities: ${ctx.capabilities.join(', ')}.\nAvailable actions on this Body: ${names}.`;
+  }
+
+  /**
+   * Assemble the full system prompt: base policy + connected-Body context
+   * + durable memory forwarded by the Body. The memory block already
+   * carries its own subordination framing (background data; the user's
+   * current instruction and this policy always win), so it can only ever
+   * inform, never override.
+   */
+  private systemPrompt(ctx: BrainTaskContext): string {
+    const memory = ctx.memoryContext?.trim();
+    return (
+      BRAIN_SYSTEM_PROMPT +
+      this.describeBody(ctx) +
+      (memory ? `\n\n${memory}` : '')
+    );
   }
 
   private parseArgs(call: ToolCall): Record<string, unknown> {
