@@ -9,6 +9,26 @@
 
 Historical sessions below are kept for context (v1.1.1-era notes are superseded — v1.2.0 shipped multi-body registry, local models, OCI, distributed Brain).
 
+## PHASE 2 — ACTIVE TASK PANEL (2026-09-08)
+
+### What / Why
+Connect real task state to the JARVIS UI: the client previously ignored `task-progress` events ("Informational — no client state change required"). Now every settled tool call drives an ACTIVE TASK panel in the right rail (above the tool-activity list): state chip (same colors/labels as StatusBar), objective, real step progress bar, per-step states (PENDING/RUNNING/RETRY/DONE/FAILED/SKIPPED), an AWAITING APPROVAL banner on `requires-confirmation`, and graceful fallback for external-Brain tasks that arrive without step lists.
+
+### Changes
+- `client/src/utils/store.ts`: `ActiveTask`/`ActiveTaskStep` types + `currentTask`/`setCurrentTask` state.
+- `client/src/hooks/useWebSocket.ts`: `task-progress` → `setCurrentTask`; reset on `connected` (fresh session); cleared in `clearHistory`.
+- `client/src/components/ActiveTaskPanel.tsx` (NEW): real-event-driven panel, bounded step list (maxHeight scroll), no fabricated data.
+- `client/src/components/ActivityPanel.tsx`: renders the panel at the top of the right rail.
+
+### Evidence
+- Client `tsc --noEmit` clean; `npm run build` clean.
+- **Runtime-verified live**: started the real backend (embedded mode), connected a WebSocket probe, sent "list the contents of /tmp" (deterministic fast path, no provider needed). Observed: `agent-state: executing — Listing /tmp…` → `tool-execution: filesystem completed` → **`task-progress #1 task=998f556a state=executing steps=[completed:File list: tmp]`** → assistant reply → `agent-state: completed`. Probe + temp data dir + server cleaned up afterwards; port 3199 free.
+- No server-side changes; server suite unaffected (still 311+8 = 319 pass / 1 skip).
+
+### Remaining
+- Uncommitted (awaiting approval).
+- External-Brain tasks show state + objective without steps (the Brain owns steps); full step lists remain embedded-mode only.
+
 ## PHASE 1 — REPO IDENTITY CANONICALIZATION (2026-09-08)
 
 ### Problem

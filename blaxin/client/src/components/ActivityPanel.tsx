@@ -1,5 +1,6 @@
 import React from 'react';
 import { useAppStore, ToolExecution } from '../utils/store';
+import { ActiveTaskPanel } from './ActiveTaskPanel';
 import { FiTerminal, FiFile, FiGlobe, FiMonitor, FiClipboard, FiSearch, FiInfo, FiZap } from 'react-icons/fi';
 
 const toolIcons: Record<string, React.ReactNode> = {
@@ -61,6 +62,9 @@ export function ActivityPanel() {
           }} />
         )}
       </div>
+
+      {/* Active task (real task-progress events) */}
+      <ActiveTaskPanel />
 
       {/* Tool executions list */}
       <div style={{

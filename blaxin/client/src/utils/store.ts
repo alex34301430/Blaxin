@@ -17,6 +17,26 @@ export interface ToolExecution {
   result?: string;
 }
 
+/** Mirrors the server's AgentTask/TaskStep shapes (task-progress events). */
+export interface ActiveTaskStep {
+  id: string;
+  description: string;
+  toolName?: string;
+  state: 'pending' | 'executing' | 'completed' | 'failed' | 'skipped' | 'retrying';
+  result?: string;
+  error?: string;
+}
+
+export interface ActiveTask {
+  id: string;
+  instruction: string;
+  state: string;
+  steps: ActiveTaskStep[];
+  currentStep: number;
+  startTime: number;
+  endTime?: number;
+}
+
 export interface ModelInfo {
   id: string;
   name: string;
@@ -64,6 +84,10 @@ interface AppState {
     description: string;
     action: string;
   } | null) => void;
+
+  // Current agent task (real task-progress events from the server)
+  currentTask: ActiveTask | null;
+  setCurrentTask: (task: ActiveTask | null) => void;
 
   // Tools
   toolExecutions: ToolExecution[];
@@ -123,6 +147,9 @@ export const useAppStore = create<AppState>((set) => ({
 
   pendingConfirmation: null,
   setPendingConfirmation: (conf) => set({ pendingConfirmation: conf }),
+
+  currentTask: null,
+  setCurrentTask: (task) => set({ currentTask: task }),
 
   toolExecutions: [],
   addToolExecution: (exec) => set((s) => ({

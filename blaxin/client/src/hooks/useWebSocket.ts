@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../utils/store';
 import { getWsUrl } from '../services/endpoints';
 import type { BrainStatusResponse } from '../services/api';
+import type { ActiveTask } from '../utils/store';
 
 const HEARTBEAT_INTERVAL_MS = 25000;
 const RECONNECT_DELAY_MS = 3000;
@@ -16,6 +17,7 @@ export function useWebSocket() {
     setAgentDescription,
     addMessage,
     addToolExecution,
+    setCurrentTask,
     setProviders,
     setActiveProvider,
     setActiveModel,
@@ -81,6 +83,8 @@ export function useWebSocket() {
                   brain: data.brain ?? null,
                 });
               }
+              // A fresh server session has no active task.
+              setCurrentTask(null);
               break;
             }
 
@@ -159,9 +163,14 @@ export function useWebSocket() {
               }
               break;
 
+            case 'task-progress':
+              // Real agent task state (embedded mode): the current task with
+              // its step list, updated on every settled tool call.
+              setCurrentTask(data as ActiveTask);
+              break;
+
             case 'provider-status':
             case 'pong':
-            case 'task-progress':
               // Informational — no client state change required
               break;
           }
@@ -202,6 +211,7 @@ export function useWebSocket() {
     send({ type: 'clear' });
     useAppStore.getState().clearMessages();
     useAppStore.getState().clearToolExecutions();
+    useAppStore.getState().setCurrentTask(null);
   }, [send]);
 
   const respondToConfirmation = useCallback((approved: boolean) => {
