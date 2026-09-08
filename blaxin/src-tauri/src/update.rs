@@ -30,13 +30,13 @@ use std::time::Duration;
 
 /// Default signed update manifest (same endpoint the Tauri updater uses).
 pub const DEFAULT_UPDATE_ENDPOINT: &str =
-    "https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/update/latest.json";
+    "https://raw.githubusercontent.com/tasinxxx/Blaxin/main/blaxin/update/latest.json";
 
 /// Release asset prefix on GitHub (deterministic naming from release.yml).
-const RELEASE_BASE: &str = "https://github.com/alex34301430/Blaxin/releases/download";
+const RELEASE_BASE: &str = "https://github.com/tasinxxx/Blaxin/releases/download";
 
 /// The only GitHub repository BLAXIN accepts releases from.
-const EXPECTED_REPO: &str = "alex34301430/Blaxin";
+const EXPECTED_REPO: &str = "tasinxxx/Blaxin";
 
 const DOWNLOAD_TIMEOUT_SECS: u64 = 300;
 const CONNECT_TIMEOUT_SECS: u64 = 15;
@@ -316,7 +316,7 @@ pub fn public_key_b64() -> String {
 
 /// Endpoint is trusted when it is the project's own HTTPS raw URL.
 fn endpoint_is_trusted(endpoint: &str) -> bool {
-    endpoint.starts_with("https://raw.githubusercontent.com/alex34301430/Blaxin/")
+    endpoint.starts_with("https://raw.githubusercontent.com/tasinxxx/Blaxin/")
 }
 
 /// Artifact URLs are only accepted from the project's own GitHub releases

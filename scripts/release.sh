@@ -132,10 +132,10 @@ if [[ -n "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
         --version "${VERSION}" \
         --notes "BLAXIN v${VERSION}" \
         --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-        --appimage-url "https://github.com/alex34301430/Blaxin/releases/download/v${VERSION}/BLAXIN_${VERSION}_amd64.AppImage" \
+        --appimage-url "https://github.com/tasinxxx/Blaxin/releases/download/v${VERSION}/BLAXIN_${VERSION}_amd64.AppImage" \
         --appimage-sig "${SIG_APPIMAGE}" \
         --appimage-sha256 "${SHA256_APPIMAGE}" \
-        --deb-url "https://github.com/alex34301430/Blaxin/releases/download/v${VERSION}/blaxin_${VERSION}_amd64.deb" \
+        --deb-url "https://github.com/tasinxxx/Blaxin/releases/download/v${VERSION}/blaxin_${VERSION}_amd64.deb" \
         --deb-sig "${DEB_SIG}" \
         --deb-sha256 "${SHA256_DEB}" \
         --out /tmp/latest.json 2>/dev/null || echo "  (manifest requires an AppImage sig — CI generates it)"

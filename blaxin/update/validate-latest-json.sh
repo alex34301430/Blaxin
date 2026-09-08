@@ -122,7 +122,7 @@ import json, sys
 data = json.load(open('${JSON_FILE}'))
 p = data.get('platforms', {}).get('linux-x86_64', {})
 url = p.get('url', '')
-if not url.startswith('https://github.com/alex34301430/Blaxin/releases/download/'):
+if not url.startswith('https://github.com/tasinxxx/Blaxin/releases/download/'):
     print('INVALID_URL')
     sys.exit(1)
 if '.AppImage' not in url:
@@ -156,7 +156,7 @@ if deb is None:
 url = deb.get('url', '')
 sig = deb.get('signature', '')
 sha = deb.get('sha256', '')
-if not url.startswith('https://github.com/alex34301430/Blaxin/releases/download/'):
+if not url.startswith('https://github.com/tasinxxx/Blaxin/releases/download/'):
     print('INVALID_URL')
     sys.exit(1)
 if not url.endswith('.deb'):

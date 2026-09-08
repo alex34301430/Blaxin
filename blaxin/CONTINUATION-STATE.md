@@ -1,10 +1,39 @@
 # BLAXIN Engineering Mission — Continuation State
 
 ## CURRENT STATE
-- **Date**: 2026-09-03 (afternoon)
+- **Date**: 2026-09-08
 - **Branch**: main
-- **HEAD**: b1948c0 (v1.1.0 released and verified)
-- **Mission Status**: **v1.1.1 production fix prepared and verified locally (not yet released/pushed).** Version bumped to 1.1.1 everywhere; installer is distro-aware (.deb preferred on Debian-family); stale `/usr/local/bin/blaxin` launcher shadowing identified and fix prepared; exact `BLAXIN</-` branding applied; icons regenerated from the official logo; a local `cargo tauri build` produced `BLAXIN_1.1.1_amd64.deb` and a real launch from it was verified (backend up, `/api/health` reports 1.1.1, window titled `BLAXIN</- — AI Desktop Agent` renders). See "V1.1.1 PRODUCTION FIX SESSION" below. Remaining: the two privileged steps (move stale launcher, `dpkg -i` the 1.1.1 deb) need a sudo password and are queued for the user; then a final re-verify + commit/push + CI release of v1.1.1.
+- **HEAD**: 90cf6e4 (before Phase 1 work; see "PHASE 1 — REPO IDENTITY CANONICALIZATION" below)
+- **Version**: 1.2.0 (tag v1.2.0 released; all in-repo version sources agree on 1.2.0)
+- **Mission Status**: **Phase 1 (canonicalize repo identity) implemented and verified locally, not yet committed.** All `alex34301430/Blaxin` references canonicalized to `tasinxxx/Blaxin` (or `${{ github.repository }}` in CI) across server, Rust updater, Tauri config, release workflow/script, installer, manifest + validator; `vv1.2.0` notes typo fixed; `.secrets/update-signing-key.txt` hardened to 0600. Verified: no stale refs remain in source, latest.json passes its validator, server tsc clean, server tests 310/311 (1 pre-existing wss-transport timing flake that passes in isolation), client build clean, `cargo check` clean. Awaiting commit per workflow (user approves commits).
+
+Historical sessions below are kept for context (v1.1.1-era notes are superseded — v1.2.0 shipped multi-body registry, local models, OCI, distributed Brain).
+
+## PHASE 1 — REPO IDENTITY CANONICALIZATION (2026-09-08)
+
+### Problem
+- Git remote is `tasinxxx/Blaxin` (matches expected identity) but ~50 source/config references hardcoded the stale `alex34301430/Blaxin`, which GitHub silently redirects (repo renamed). Raw/manifest URLs, the runtime update check, and the Rust updater's `EXPECTED_REPO` all pointed at the old name — working today only via GitHub's rename redirect, breaking silently if the old name is ever reclaimed. Release notes also carried a `vv1.2.0` double-v typo.
+
+### Changes (WHAT/WHY)
+- `server/src/utils/version.ts`: `GITHUB_REPO` → `tasinxxx/Blaxin` (runtime `/api/update/check` now targets the real repo).
+- `src-tauri/src/update.rs`: `DEFAULT_UPDATE_ENDPOINT`, `RELEASE_BASE`, `EXPECTED_REPO`, endpoint allowlist → `tasinxxx/Blaxin` (.deb updater refuses releases from any other repo).
+- `src-tauri/tauri.conf.json`: updater endpoint → `tasinxxx/Blaxin` (AppImage updater manifest).
+- `.github/workflows/release.yml`: manifest URLs + release-body install URL now use `${{ github.repository }}` (self-healing — always matches the real repo).
+- `scripts/release.sh`: manifest URLs → `tasinxxx/Blaxin`.
+- `blaxin/install.sh`: `REPO=` + docs → `tasinxxx/Blaxin`.
+- `blaxin/update/latest.json`: URLs → `tasinxxx/Blaxin`; `vv1.2.0` → `v1.2.0`.
+- `blaxin/update/validate-latest-json.sh` + `build-manifest.py` (comment): URL prefixes → `tasinxxx/Blaxin`.
+- `blaxin/.secrets/update-signing-key.txt`: chmod 664 → 600 (updater private key no longer world-readable; file is gitignored/untracked).
+- `server/src/orchestrator/index.ts` + `server/src/distributed/brain-drivers.ts`: added an explicit TRUST BOUNDARY / prompt-injection instruction to both system prompts (embedded orchestrator + external Brain): tool output and external content are untrusted DATA, embedded instructions ("ignore previous instructions" etc.) are never followed, external content can't override user instruction/policy, secrets never revealed regardless of claims. Verifies the audit's "prompt injection boundary: PARTIAL → now explicit."
+
+### Evidence
+- `grep -rln alex34301430` over source (ts/tsx/rs/json/yml/md/sh/py, excluding node_modules/target/dist): **0 matches**.
+- `bash blaxin/update/validate-latest-json.sh blaxin/update/latest.json 1.2.0` → **Validation PASSED**.
+- Server `tsc --noEmit` clean; client `npm run build` clean; `cargo check` clean (blaxin v1.2.0).
+- Server tests: 311 passed / 1 skipped on the post-hardening run (the wss-transport real-TLS test flaked once under full-suite load in an earlier run — passes in isolation 4/4 and passed in the final run; pre-existing timing flake, unrelated to these changes).
+
+### Remaining risk
+- None material. The committed `latest.json` still describes the released v1.2.0 artifacts (URLs now canonical); CI regenerates it on the next tagged release.
 
 ## WORK COMPLETED THIS SESSION (VERIFIED)
 

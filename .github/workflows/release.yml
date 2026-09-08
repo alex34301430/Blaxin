@@ -352,12 +352,12 @@ jobs:
 
           python3 blaxin/update/build-manifest.py \
             --version "$VERSION_NUM" \
-            --notes "BLAXIN v$VERSION — See https://github.com/alex34301430/Blaxin/releases/tag/$VERSION for details." \
+            --notes "BLAXIN v$VERSION — See https://github.com/${{ github.repository }}/releases/tag/$VERSION for details." \
             --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            --appimage-url "https://github.com/alex34301430/Blaxin/releases/download/${VERSION}/BLAXIN_${VERSION_NUM}_amd64.AppImage" \
+            --appimage-url "https://github.com/${{ github.repository }}/releases/download/${VERSION}/BLAXIN_${VERSION_NUM}_amd64.AppImage" \
             --appimage-sig "artifacts/BLAXIN_${VERSION_NUM}_amd64.AppImage.sig" \
             --appimage-sha256 "$(awk '{print $1}' "artifacts/BLAXIN_${VERSION_NUM}_amd64.AppImage.sha256")" \
-            --deb-url "https://github.com/alex34301430/Blaxin/releases/download/${VERSION}/blaxin_${VERSION_NUM}_amd64.deb" \
+            --deb-url "https://github.com/${{ github.repository }}/releases/download/${VERSION}/blaxin_${VERSION_NUM}_amd64.deb" \
             --deb-sig "artifacts/blaxin_${VERSION_NUM}_amd64.deb.sig" \
             --deb-sha256 "$(awk '{print $1}' "artifacts/blaxin_${VERSION_NUM}_amd64.deb.sha256")" \
             --out artifacts/latest.json
@@ -511,7 +511,7 @@ jobs:
 
             ### Quick Install
             ```bash
-            curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/install.sh | bash
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/blaxin/install.sh | bash
             ```
 
             ### Downloads

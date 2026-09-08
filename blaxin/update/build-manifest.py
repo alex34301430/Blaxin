@@ -8,7 +8,7 @@
 #   pub_date           ISO-8601 UTC publish time
 #   platforms:
 #     linux-x86_64:    Tauri updater (AppImage) entry
-#       url            https://github.com/alex34301430/Blaxin/releases/download/...
+#       url            https://github.com/tasinxxx/Blaxin/releases/download/...
 #       signature      single-line base64 of the minisign signature text
 #       sha256         hex sha256 of the AppImage
 #   deb:               BLAXIN .deb self-updater entry

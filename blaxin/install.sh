@@ -3,7 +3,7 @@
 # BLAXIN — Production-Grade Installer for Linux
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/tasinxxx/Blaxin/main/blaxin/install.sh | bash
 #
 # What it does:
 #   1. Detects Linux distribution and architecture
@@ -32,7 +32,7 @@
 set -Eeuo pipefail
 
 # ── Configuration ──────────────────────────────────────────────────────
-REPO="alex34301430/Blaxin"
+REPO="tasinxxx/Blaxin"
 APP_NAME="blaxin"
 INSTALL_DIR="/opt/blaxin"
 BIN_DIR="/usr/local/bin"
@@ -93,8 +93,8 @@ Options:
   -h, --help   Show this help and exit
 
 Examples:
-  curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/install.sh | bash
-  curl -fsSL https://raw.githubusercontent.com/alex34301430/Blaxin/main/blaxin/install.sh | bash -s -- --appimage
+  curl -fsSL https://raw.githubusercontent.com/tasinxxx/Blaxin/main/blaxin/install.sh | bash
+  curl -fsSL https://raw.githubusercontent.com/tasinxxx/Blaxin/main/blaxin/install.sh | bash -s -- --appimage
 EOF
 }
 
