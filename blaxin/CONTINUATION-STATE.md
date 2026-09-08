@@ -32,6 +32,18 @@ The audit found the memory system was write-only from the agent's perspective: f
 ### Remaining
 - Committed. External/distributed Brain mode still has no memory read/write on the Body side (Brain host owns its own prompt); deferred — unverifiable live in this environment.
 
+## PHASE 8 — LIVE PRODUCTION VERIFICATION (2026-09-08, post-Phase 6)
+
+### Evidence (scratch backend on 127.0.0.1:3199, scratch BLAXIN_DATA_DIR)
+- **Backend init**: server starts clean; all 8 tools register; 8 providers initialize (Ollama local initialized; remote providers warn NO key as expected); WS upgrade/connect works; `/api/health` → `{"status":"ok","version":"1.2.0"}`.
+- **Safe task loop** (deterministic fast path, no provider): `connected → user-message → agent-state executing “Listing /tmp…” → tool-execution filesystem → task-progress (step completed, riskTier MEDIUM, permissionScope ALWAYS_ALLOW) → assistant reply → agent-state completed → task-complete (kind=direct, modelCalls=0, toolCalls=1)`. Real states observed on the wire — UI sources verified.
+- **Failure**: LLM-only task with no provider → graceful `error` event `{code: NO_PROVIDER, message: “No AI provider or model configured…”}`; no crash; state resets on clear.
+- **Audio/voice**: headless — physical auditory output NOT VERIFIED; WebKitGTK STT E2E NOT VERIFIED (unchanged; mic disabled affordance in place).
+- **Packaging/runtime**: not re-run this session (v1.2.0 released via CI; .deb build+launch verified at v1.1.1).
+
+### Remaining
+- Live LLM round trip (needs a provider key) and permission-gate denial via LLM remain environment-blocked; both covered by deterministic integration tests (risk-permission, permission-grants, memory-readback).
+
 ## PHASE 5 — VOICE POLISH + JARVIS AUDIO IDENTITY (2026-09-08)
 
 ### What / Why
