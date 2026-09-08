@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useAppStore } from '../utils/store';
 import { FiWifi, FiWifiOff, FiCpu, FiSquare, FiTrash2, FiMic, FiCpu as FiBrainIcon } from 'react-icons/fi';
 
@@ -28,6 +28,40 @@ const stateLabels: Record<string, string> = {
 
 export function StatusBar({ onStop, onClear }: { onStop: () => void; onClear: () => void }) {
   const { connected, agentState, agentDescription, activeProvider, activeModel, messages, isListening, brainStatus, setCurrentPage } = useAppStore();
+  const liveRef = useRef<HTMLSpanElement>(null);
+  const lastAnnouncedState = useRef<string | null>(null);
+
+  // Screen-reader live region: announce real agent-state transitions in
+  // plain words (never animation-only). The status bar is visible on every
+  // page, so users hear about task progress even outside the Chat tab.
+  useEffect(() => {
+    if (!connected) return;
+    const prev = lastAnnouncedState.current;
+    lastAnnouncedState.current = agentState;
+    if (prev === agentState) return;
+    if (prev === null) return; // boot — don't announce the initial idle
+    if (agentState === 'idle' && prev === 'idle') return;
+
+    const text: Record<string, string> = {
+      idle: 'BLAXIN is idle',
+      thinking: 'BLAXIN is thinking',
+      planning: 'BLAXIN is planning',
+      executing: 'BLAXIN is executing an action',
+      observing: 'BLAXIN is observing the result',
+      waiting: 'BLAXIN is waiting',
+      'requires-confirmation': 'BLAXIN needs your approval',
+      completed: agentDescription && !agentDescription.toLowerCase().includes('completed')
+        ? `Task completed: ${agentDescription}`
+        : 'Task completed',
+      error: agentDescription ? `BLAXIN error: ${agentDescription}` : 'BLAXIN encountered an error',
+    };
+    const msg = text[agentState] || `BLAXIN state: ${agentState}`;
+    const el = liveRef.current;
+    if (!el) return;
+    el.textContent = '';
+    // Re-set on the next frame so identical text is still re-announced.
+    requestAnimationFrame(() => { el.textContent = msg; });
+  }, [agentState, agentDescription, connected]);
 
   const showActivity = agentState !== 'idle' && agentState !== 'completed' && agentState !== 'error';
 
@@ -73,6 +107,12 @@ export function StatusBar({ onStop, onClear }: { onStop: () => void; onClear: ()
       position: 'relative',
       zIndex: 2,
     }}>
+      {/* Visually hidden polite live region (screen readers). */}
+      <span
+        ref={liveRef}
+        role="status"
+        style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap' }}
+      />
       {/* Connection Status */}
       <div style={{
         display: 'flex',
@@ -227,6 +267,7 @@ export function StatusBar({ onStop, onClear }: { onStop: () => void; onClear: ()
 
       <button
         onClick={onClear}
+        aria-label="Clear conversation"
         style={{
           display: 'flex',
           alignItems: 'center',

@@ -9,6 +9,23 @@
 
 Historical sessions below are kept for context (v1.1.1-era notes are superseded — v1.2.0 shipped multi-body registry, local models, OCI, distributed Brain).
 
+## PHASE 7 — KEYBOARD / SCREEN-READER / STATE-VISUALIZATION POLISH (2026-09-08)
+
+### What / Why
+CSS foundations (focus-visible rings, prefers-reduced-motion) already existed. The audit found real gaps: **zero aria-live regions** (a screen-reader user never hears state changes or replies), icon-only buttons named only by `title` (unreliable as accessible names), and a confirmation dialog with no Escape path and no focus restore.
+
+### Changes
+- `client/src/components/StatusBar.tsx`: visually-hidden `role="status"` live region announcing real agent-state transitions in plain words (visible on every page); `aria-label` on the clear-conversation icon button.
+- `client/src/components/ChatPanel.tsx`: visually-hidden `role="status"` live region announcing each new assistant/system reply (dedup by message id; restored history on boot is not re-announced); `aria-label` + `aria-pressed` on mic/TTS/audio-mute toggles; `aria-label` on send/stop/disabled-mic buttons; `aria-label` on the message textarea.
+- `client/src/components/ConfirmationModal.tsx`: Escape now DENIES (safe default — focus lands on Deny, so Enter never accidentally approves a high-impact action); focus is saved on open and restored on close; `aria-describedby` points the dialog at the risk description.
+
+### Evidence
+- Client build clean (`tsc -b && vite build`). No server changes. No new dependencies.
+- Screen-reader behavior itself NOT VERIFIED in a real SR (headless); announcements are standard `role=status` semantics and type-checked. Live-region text is driven purely by real store transitions — no fake state.
+
+### Remaining
+- Committed. SettingsModal / SetupWizard overlays still lack full dialog semantics (role/focus/Escape) — large components, deferred. Deep focus-trap per dialog not implemented (Escape + initial focus + restore covers the confirmation gate, the safety-critical dialog).
+
 ## PHASE 6 — MEMORY READ-BACK + MEMORY MANAGEMENT (2026-09-08)
 
 ### What / Why

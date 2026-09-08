@@ -92,6 +92,31 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
 
   const isActive = agentState !== 'idle' && agentState !== 'completed' && agentState !== 'error';
 
+  // Screen-reader live region: announce each new assistant/system reply in
+  // plain words so a user who cannot see the chat still hears the answer.
+  const liveRef = useRef<HTMLSpanElement>(null);
+  const lastAnnouncedMsgId = useRef<string | null>(null);
+  const bootedRef = useRef(false);
+  useEffect(() => {
+    if (!bootedRef.current) { bootedRef.current = true; return; } // skip restored history
+    if (messages.length === 0) return;
+    const last = messages[messages.length - 1];
+    if (last.role === 'user' || lastAnnouncedMsgId.current === last.id) return;
+    lastAnnouncedMsgId.current = last.id;
+    const clean = last.content
+      .replace(/```[\s\S]*?```/g, 'code block omitted')
+      .replace(/`[^`]+`/g, (m) => m.slice(1, -1))
+      .replace(/[#*_>[\]]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!clean) return;
+    const el = liveRef.current;
+    if (!el) return;
+    const text = (last.role === 'assistant' ? 'BLAXIN: ' : 'Notice: ') + clean.slice(0, 600);
+    el.textContent = '';
+    requestAnimationFrame(() => { el.textContent = text; });
+  }, [messages]);
+
   return (
     <div style={{
       flex: 1,
@@ -100,6 +125,12 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
       background: 'var(--bg-primary)',
       position: 'relative',
     }}>
+      {/* Visually hidden polite live region (screen readers). */}
+      <span
+        ref={liveRef}
+        role="status"
+        style={{ position: 'absolute', width: 1, height: 1, overflow: 'hidden', clipPath: 'inset(50%)', whiteSpace: 'nowrap' }}
+      />
       {/* Messages */}
       <div style={{
         flex: 1,
@@ -262,6 +293,8 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
               <button
                 onClick={toggleVoice}
                 disabled={isActive}
+                aria-label={isListening ? 'Stop listening' : 'Start voice input'}
+                aria-pressed={isListening}
                 style={{
                   width: 36,
                   height: 36,
@@ -293,6 +326,8 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
                   setTtsEnabled(!ttsEnabled);
                   if (ttsEnabled) stopSpeaking();
                 }}
+                aria-label={ttsEnabled ? 'Disable voice output' : 'Enable voice output'}
+                aria-pressed={ttsEnabled}
                 style={{
                   width: 36,
                   height: 36,
@@ -315,6 +350,8 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                 <button
                   onClick={() => setAudioEnabled(!audioEnabled)}
+                  aria-label={audioEnabled ? 'Mute JARVIS sounds' : 'Unmute JARVIS sounds'}
+                  aria-pressed={audioEnabled}
                   style={{
                     width: 36,
                     height: 36,
@@ -347,6 +384,7 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
           {!isSupported && (
             <button
               disabled
+              aria-label="Voice input is not supported in this browser/webview"
               style={{
                 width: 36,
                 height: 36,
@@ -371,6 +409,7 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
             onChange={e => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={isListening ? "Listening... speak now" : "Tell BLAXIN what to do..."}
+            aria-label="Message BLAXIN"
             disabled={isActive}
             rows={1}
             style={{
@@ -397,6 +436,7 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
           {isActive ? (
             <button
               onClick={stopAgent}
+              aria-label="Stop agent"
               style={{
                 width: 40,
                 height: 40,
@@ -416,6 +456,7 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
             <button
               onClick={handleSend}
               disabled={!input.trim()}
+              aria-label="Send message"
               style={{
                 width: 40,
                 height: 40,

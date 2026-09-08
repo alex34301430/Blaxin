@@ -16,11 +16,34 @@ export function ConfirmationModal({
 }) {
   const { pendingConfirmation, agentState } = useAppStore();
   const cancelRef = useRef<HTMLButtonElement>(null);
+  const lastFocusedRef = useRef<Element | null>(null);
+  const onRespondRef = useRef(onRespond);
+  useEffect(() => { onRespondRef.current = onRespond; }, [onRespond]);
 
   useEffect(() => {
-    if (pendingConfirmation) {
-      cancelRef.current?.focus();
-    }
+    if (!pendingConfirmation) return;
+
+    // Remember what had focus so we can give it back when the dialog
+    // closes (keyboard users should not be stranded after approving).
+    lastFocusedRef.current = document.activeElement;
+    cancelRef.current?.focus();
+
+    // Escape denies: the safe, non-executing choice. Enter activates the
+    // focused button, so the default (focus lands on Deny) never approves
+    // a high-impact action by accident.
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onRespondRef.current(false);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      const prev = lastFocusedRef.current;
+      lastFocusedRef.current = null;
+      if (prev instanceof HTMLElement) prev.focus();
+    };
   }, [pendingConfirmation]);
 
   if (!pendingConfirmation) return null;
@@ -59,6 +82,7 @@ export function ConfirmationModal({
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirmation-title"
+        aria-describedby="confirmation-description"
         style={{
           width: 520,
           maxWidth: '90vw',
@@ -91,16 +115,19 @@ export function ConfirmationModal({
         </div>
 
         <div style={{ padding: '20px' }}>
-          <div style={{
-            padding: '12px 14px',
-            background: 'var(--bg-primary)',
-            border: '1px solid var(--border-subtle)',
-            borderRadius: 'var(--radius-md)',
-            marginBottom: 12,
-            fontSize: 13,
-            color: 'var(--text-primary)',
-            lineHeight: 1.6,
-          }}>
+          <div
+            id="confirmation-description"
+            style={{
+              padding: '12px 14px',
+              background: 'var(--bg-primary)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-md)',
+              marginBottom: 12,
+              fontSize: 13,
+              color: 'var(--text-primary)',
+              lineHeight: 1.6,
+            }}
+          >
             {pendingConfirmation.description}
           </div>
 
