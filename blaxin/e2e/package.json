@@ -1,0 +1,14 @@
+{
+  "name": "blaxin-e2e",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "End-to-end browser tests: real backend + vite dev server, driven through the installed Google Chrome.",
+  "scripts": {
+    "test": "playwright test",
+    "test:headed": "playwright test --headed"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

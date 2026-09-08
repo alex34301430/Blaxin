@@ -9,6 +9,23 @@
 
 Historical sessions below are kept for context (v1.1.1-era notes are superseded — v1.2.0 shipped multi-body registry, local models, OCI, distributed Brain).
 
+## PHASE E2E — REAL-STACK BROWSER TESTS (vite + backend + Chrome, 2026-09-08)
+
+### What / Why
+No end-to-end coverage existed: the server suite tests the backend and the build only type-checks the client. This adds a Playwright suite that drives the REAL client (vite dev server) against the REAL backend through the system Google Chrome (channel 'chrome', no browser downloads). No provider key required — safe deterministic tasks run on the fast path.
+
+### Changes
+- `e2e/` (NEW): `package.json` (@playwright/test 1.63), `playwright.config.ts` (dual webServer: backend `tsx src/index.ts` on 3001 w/ scratch data dir under `.runtime/`; vite on 5173 bound to 127.0.0.1), `tests/app.spec.ts`, README.
+- `client/src/pages/MemoryPage.tsx`: `data-testid` hooks on the note input + rows (testability only).
+- `blaxin/.gitignore`: `e2e/.runtime/`, `e2e/test-results/`, `e2e/playwright-report/`.
+
+### Evidence
+- **3/3 tests PASS** (6.5s): (1) app loads + connects (`LIVE`) + chrome renders; (2) real safe task "list /tmp" runs end to end — StatusBar live region announces the real transition to `Task completed`, the chat live region announces `BLAXIN: …`, agent lands on DONE; (3) Memory page saves + deletes a durable note through the real API. The `ws proxy … ECONNRESET` lines during teardown are benign (page closes while WS open).
+- Run locally: `cd blaxin/e2e && npm test` (needs deps in ../server, ../client, and system Chrome).
+
+### Remaining
+- Not wired into CI yet; CI=1 retries are supported in the config. Screen-reader output itself remains NOT VERIFIED (DOM live regions asserted instead).
+
 ## PHASE 7 — KEYBOARD / SCREEN-READER / STATE-VISUALIZATION POLISH (2026-09-08)
 
 ### What / Why

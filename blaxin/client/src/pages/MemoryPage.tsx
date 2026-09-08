@@ -166,6 +166,7 @@ export function MemoryPage() {
           ))}
         </div>
         <textarea
+          data-testid="memory-note-input"
           value={addContent}
           onChange={(e) => setAddContent(e.target.value)}
           placeholder={addType === 'preference'
@@ -284,7 +285,7 @@ export function MemoryPage() {
           {visible.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: '8px 0' }}>
               {visible.map((e) => (
-                <div key={e.id} style={{
+                <div key={e.id} data-testid="memory-entry" style={{
                   display: 'flex', alignItems: 'flex-start', gap: 10,
                   padding: '8px 10px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)',
                 }}>
