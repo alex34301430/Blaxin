@@ -9,6 +9,19 @@
 
 Historical sessions below are kept for context (v1.1.1-era notes are superseded — v1.2.0 shipped multi-body registry, local models, OCI, distributed Brain).
 
+## PHASE PACK — PACKAGED .deb VERIFICATION (2026-09-08)
+
+### Evidence (current code: client dist + server dist synced to resources/blaxin-server, cargo tauri build --bundles deb)
+- **Build**: `BLAXIN_1.2.0_amd64.deb` (39 MB) produced; ends with the expected updater error (`TAURI_SIGNING_PRIVATE_KEY` — CI holds it; deb itself complete/unsigned-deb-safe).
+- **Version consistency**: bundled `blaxin-server/package.json` = 1.2.0; bundled node v20.18.0; `/api/health` → `{"status":"ok","version":"1.2.0"}`.
+- **Install/launch**: real `dpkg -i` NOT possible (sudo needs a password here) — extracted with `dpkg-deb -x` and ran the binary directly (same resource-resolution path as a real install). Window `"BLAXIN — AI Desktop Agent"` rendered on DISPLAY=:0.0; bundled node + server found; `[BLAXIN] Server is ready!`; updater check ran (`available=false latest=1.2.0`).
+- **Observe**: OCR of the live window shows the real UI — status bar (IDLE/LIVE/BRAIN LOCAL), full sidebar incl. the new **Memory** nav, welcome + input. WebKitGTK (system) processes alive; no EGL abort. (Visual capture of the webview needed `WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_COMPOSITING_MODE=1 LIBGL_ALWAYS_SOFTWARE=1` on this display.)
+- **Execute safe task**: sent "list the contents of /tmp" to the packaged server → real tool execution; the packaged UI then showed agent state **DONE** and rendered the actual `/tmp` listing in the chat (OCR-verified).
+- **Relaunch**: exercised (single-instance lock; clean restart after removing a stale leftover instance).
+
+### Remaining
+- Not a real system install (no passwordless sudo) — launcher/desktop-entry post-install hooks unverified this session. Updater artifacts unsigned (CI signs). AppImage not rebuilt (deb is the supported Debian-family channel).
+
 ## PHASE E2E — REAL-STACK BROWSER TESTS (vite + backend + Chrome, 2026-09-08)
 
 ### What / Why
