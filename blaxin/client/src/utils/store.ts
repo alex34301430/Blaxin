@@ -130,6 +130,12 @@ interface AppState {
   voiceTranscript: string;
   setVoiceTranscript: (transcript: string) => void;
 
+  // JARVIS audio identity (event sounds)
+  audioEnabled: boolean;
+  setAudioEnabled: (enabled: boolean) => void;
+  audioVolume: number;
+  setAudioVolume: (volume: number) => void;
+
   // Distributed Brain (external mode) — snapshot of the authoritative
   // server status (the server owns the connection state machine; the UI
   // only mirrors it).
@@ -139,6 +145,27 @@ interface AppState {
   // Error
   lastError: string | null;
   setLastError: (error: string | null) => void;
+}
+
+// JARVIS audio identity preferences (persisted locally).
+const AUDIO_ENABLED_KEY = 'blaxin-audio-enabled';
+const AUDIO_VOLUME_KEY = 'blaxin-audio-volume';
+
+function loadAudioEnabled(): boolean {
+  try {
+    return localStorage.getItem(AUDIO_ENABLED_KEY) !== '0';
+  } catch {
+    return true;
+  }
+}
+
+function loadAudioVolume(): number {
+  try {
+    const v = Number(localStorage.getItem(AUDIO_VOLUME_KEY));
+    return Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5;
+  } catch {
+    return 0.5;
+  }
 }
 
 export const useAppStore = create<AppState>((set) => ({
@@ -189,6 +216,18 @@ export const useAppStore = create<AppState>((set) => ({
   setIsListening: (listening) => set({ isListening: listening }),
   voiceTranscript: '',
   setVoiceTranscript: (transcript) => set({ voiceTranscript: transcript }),
+
+  audioEnabled: loadAudioEnabled(),
+  setAudioEnabled: (enabled) => {
+    try { localStorage.setItem(AUDIO_ENABLED_KEY, enabled ? '1' : '0'); } catch { /* private mode */ }
+    set({ audioEnabled: enabled });
+  },
+  audioVolume: loadAudioVolume(),
+  setAudioVolume: (volume) => {
+    const clamped = Math.max(0, Math.min(1, volume));
+    try { localStorage.setItem(AUDIO_VOLUME_KEY, String(clamped)); } catch { /* private mode */ }
+    set({ audioVolume: clamped });
+  },
 
   brainStatus: null,
   setBrainStatus: (status) => set({ brainStatus: status }),

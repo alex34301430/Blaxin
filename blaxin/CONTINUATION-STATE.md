@@ -9,6 +9,27 @@
 
 Historical sessions below are kept for context (v1.1.1-era notes are superseded — v1.2.0 shipped multi-body registry, local models, OCI, distributed Brain).
 
+## PHASE 5 — VOICE POLISH + JARVIS AUDIO IDENTITY (2026-09-08)
+
+### What / Why
+Directive §23/§24/§36: a small centralized event→sound identity (WebAudio-synthesized, no assets) driven by REAL store transitions, plus visible voice errors instead of console-only noise, an unsupported-mic affordance, and mute/volume controls that persist.
+
+### Changes
+- `client/src/services/audio.ts` (NEW): 15 event sounds (STARTUP/READY/CONNECTED/DISCONNECTED/LISTENING/THINKING/PLANNING/ACTION_STARTED/OBSERVATION/VERIFICATION/PERMISSION_REQUIRED/WARNING/ERROR/CANCELLED/TASK_COMPLETED), per-event debounce (350ms), mute + volume, autoplay unlock on first gesture.
+- `client/src/hooks/useAudioFeedback.ts` (NEW): plays sounds on real agent-state/connection/listening transitions; `useAudioUnlock()` for the first user gesture.
+- `client/src/utils/store.ts`: `audioEnabled` + `audioVolume` persisted to localStorage.
+- `client/src/hooks/useVoice.ts`: STT failures now surface as a visible `voiceError` (permission denied / no mic / no speech / offline / aborted) with auto-clear.
+- `client/src/components/ChatPanel.tsx`: visible voice-error banner; disabled mic button when STT unsupported; JARVIS sound mute toggle + volume slider.
+- `client/src/App.tsx`: wires `useAudioFeedback` + `useAudioUnlock`.
+
+### Evidence
+- Client tsc clean; client build clean.
+- **Audio logic verified at runtime** (stubbed AudioContext): all 15 events play without errors; 4 rapid plays within the debounce window collapse to one; muted plays produce no sound; volume clamps/applies. Auditory character itself NOT VERIFIED (headless — no speaker); tone map is easy to tune later.
+- Voice-error mapping is type-checked and wired; STT e2e on WebKitGTK remains unverified (documented since v1.1.0) — mic button now visibly disabled when unsupported.
+
+### Remaining
+- Committed. (STT e2e on WebKitGTK and the auditory character remain NOT VERIFIED — headless environment; tone map easy to tune later.)
+
 ## PHASE 3 — LIVE SYSTEM TELEMETRY + CAPABILITIES PANELS (2026-09-08)
 
 ### What / Why

@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useAppStore, ChatMessage } from '../utils/store';
 import { useVoice } from '../hooks/useVoice';
 import ReactMarkdown from 'react-markdown';
-import { FiSend, FiSquare, FiMic, FiMicOff, FiVolume2, FiVolumeX } from 'react-icons/fi';
+import { FiSend, FiSquare, FiMic, FiMicOff, FiVolume2, FiVolumeX, FiAlertTriangle } from 'react-icons/fi';
 
 interface ChatPanelProps {
   sendMessage: (msg: string) => void;
@@ -14,7 +14,7 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const { messages, agentState, agentDescription, lastError, setLastError, ttsEnabled, setTtsEnabled, voiceEnabled, setVoiceEnabled } = useAppStore();
+  const { messages, agentState, agentDescription, lastError, setLastError, ttsEnabled, setTtsEnabled, voiceEnabled, setVoiceEnabled, audioEnabled, setAudioEnabled, audioVolume, setAudioVolume } = useAppStore();
 
   // Convert errors to visible messages in chat
   useEffect(() => {
@@ -34,7 +34,7 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
     }
   }, [lastError]);
 
-  const { startListening, stopListening, speak, stopSpeaking, isSupported, isListening, isSpeaking } = useVoice({
+  const { startListening, stopListening, speak, stopSpeaking, isSupported, isListening, isSpeaking, voiceError } = useVoice({
     onFinalTranscript: useCallback((transcript: string) => {
       setInput(prev => prev ? prev + ' ' + transcript : transcript);
     }, []),
@@ -236,6 +236,21 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
         borderTop: '1px solid var(--border-subtle)',
         background: 'var(--bg-secondary)',
       }}>
+        {/* Visible voice errors (never hidden) */}
+        {voiceError && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            marginBottom: 8, padding: '6px 10px',
+            background: 'rgba(255, 51, 85, 0.08)',
+            border: '1px solid rgba(255, 51, 85, 0.3)',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: 11, color: 'var(--accent-red)',
+          }}>
+            <FiAlertTriangle size={12} />
+            {voiceError}
+          </div>
+        )}
+
         <div style={{
           display: 'flex',
           gap: 8,
@@ -295,7 +310,59 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
               >
                 {isSpeaking ? <FiVolume2 size={14} className="pulse-soft" /> : ttsEnabled ? <FiVolume2 size={14} /> : <FiVolumeX size={14} />}
               </button>
+
+              {/* JARVIS audio identity — mute + volume (event sounds) */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <button
+                  onClick={() => setAudioEnabled(!audioEnabled)}
+                  style={{
+                    width: 36,
+                    height: 36,
+                    borderRadius: 'var(--radius-md)',
+                    background: audioEnabled ? 'rgba(123, 45, 255, 0.12)' : 'var(--bg-tertiary)',
+                    color: audioEnabled ? 'var(--accent-secondary)' : 'var(--text-muted)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    border: `1px solid ${audioEnabled ? 'rgba(123, 45, 255, 0.3)' : 'var(--border-subtle)'}`,
+                  }}
+                  title={audioEnabled ? 'Mute JARVIS sounds' : 'Unmute JARVIS sounds'}
+                >
+                  {audioEnabled ? <FiVolume2 size={14} /> : <FiVolumeX size={14} />}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={Math.round(audioVolume * 100)}
+                  onChange={(e) => setAudioVolume(Number(e.target.value) / 100)}
+                  style={{ width: 56, accentColor: 'var(--accent-secondary)' }}
+                  aria-label="JARVIS sound volume"
+                  title="JARVIS sound volume"
+                />
+              </div>
             </div>
+          )}
+
+          {!isSupported && (
+            <button
+              disabled
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 'var(--radius-md)',
+                background: 'var(--bg-tertiary)',
+                color: 'var(--text-muted)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                border: '1px solid var(--border-subtle)',
+                opacity: 0.5,
+              }}
+              title="Voice input is not supported in this browser/webview"
+            >
+              <FiMicOff size={14} />
+            </button>
           )}
 
           <textarea

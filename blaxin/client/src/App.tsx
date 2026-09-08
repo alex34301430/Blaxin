@@ -15,6 +15,7 @@ import { SetupWizard } from './components/SetupWizard';
 import { UpdateNotifier } from './components/UpdateNotifier';
 import { useAppStore } from './utils/store';
 import { useWebSocket } from './hooks/useWebSocket';
+import { useAudioFeedback, useAudioUnlock } from './hooks/useAudioFeedback';
 import { api } from './services/api';
 import './theme/cyberpunk.css';
 
@@ -24,6 +25,11 @@ export default function App() {
   const { connected, settingsOpen, sidebarOpen, currentPage, activeModel, pendingConfirmation } = useAppStore();
   const { sendMessage, stopAgent, clearHistory, respondToConfirmation } = useWebSocket();
   const [showSetup, setShowSetup] = useState(false);
+
+  // JARVIS audio identity: sounds on real state transitions, mute/volume
+  // honored, browser audio unlocked on the first user gesture.
+  useAudioFeedback();
+  useAudioUnlock();
 
   // First-run detection
   useEffect(() => {

@@ -14,13 +14,17 @@ interface UseVoiceReturn {
   isSupported: boolean;
   isListening: boolean;
   isSpeaking: boolean;
+  /** Human-readable last STT failure (null when OK). */
+  voiceError: string | null;
 }
 
 export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
   const recognitionRef = useRef<any>(null);
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [isSpeakingState, setIsSpeaking] = useState(false);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
   const {
     voiceEnabled,
     ttsEnabled,
@@ -72,8 +76,27 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
     };
 
     recognition.onerror = (event: any) => {
-      console.warn('[BLAXIN] Speech recognition error:', event.error);
+      // Voice failures must be visible, not just console noise.
+      const code = String(event.error || 'unknown');
+      let message: string | null = null;
+      if (code === 'not-allowed' || code === 'service-not-allowed') {
+        message = 'Microphone permission denied — allow the microphone to use voice input.';
+      } else if (code === 'audio-capture') {
+        message = 'No microphone detected.';
+      } else if (code === 'no-speech') {
+        message = 'No speech detected — try again.';
+      } else if (code === 'network') {
+        message = 'Speech service unreachable (offline?).';
+      } else if (code === 'aborted') {
+        message = null; // user cancelled — not an error
+      } else {
+        message = `Voice input error: ${code}.`;
+      }
+      setVoiceError(message);
       setIsListening(false);
+      if (message && errorTimerRef.current) clearTimeout(errorTimerRef.current);
+      errorTimerRef.current = setTimeout(() => setVoiceError(null), 5000);
+      console.warn('[BLAXIN] Speech recognition error:', code);
     };
 
     recognition.onend = () => {
@@ -83,6 +106,7 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
     recognitionRef.current = recognition;
 
     return () => {
+      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
       try {
         recognition.abort();
       } catch {}
@@ -119,7 +143,9 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
       recognitionRef.current.start();
       setIsListening(true);
       setVoiceTranscript('');
+      setVoiceError(null);
     } catch (err) {
+      setVoiceError('Could not start voice input — check the microphone.');
       console.error('[BLAXIN] Failed to start recognition:', err);
     }
   }, [isListening]);
@@ -175,5 +201,6 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
     isSupported,
     isListening,
     isSpeaking,
+    voiceError,
   };
 }
