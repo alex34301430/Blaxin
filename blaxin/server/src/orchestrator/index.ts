@@ -2,9 +2,10 @@ import { v4 as uuidv4 } from 'uuid';
 import {
   ChatMessage, AgentState, AgentTask, TaskStep, AIResponse, ToolCall,
   ProviderId, AppConfig, ToolResult, Tool, ToolDefinition,
+  RiskTier, PermissionScope,
 } from '../types.js';
 import { providers, AIProvider, ProviderError } from '../providers/index.js';
-import { toolRegistry } from '../tools/index.js';
+import { toolRegistry, riskFor } from '../tools/index.js';
 import { logger } from '../utils/logger.js';
 import { getConfig, matchesAnyPattern } from '../utils/config.js';
 import { sessionState } from '../utils/session-state.js';
@@ -142,6 +143,10 @@ interface ExecutionStep {
   attempts: number;
   startTime?: number;
   endTime?: number;
+  /** Declared danger of this action (computed up front). */
+  riskTier?: RiskTier;
+  /** How this step was authorized (ALWAYS_ALLOW / ALLOW_ONCE / DENY). */
+  permissionScope?: PermissionScope;
 }
 
 interface TaskPlan {
@@ -1016,6 +1021,8 @@ export class AgentOrchestrator {
       logger.warn('orchestrator', `Failed to parse tool arguments for ${toolName}`);
     }
 
+    const config = this.configOf();
+    const needsConfirmation = this.stepNeedsConfirmation(toolName, toolArgs, config);
     const step: ExecutionStep = {
       id: toolCall.id,
       description: this.describeToolAction(toolName, toolArgs),
@@ -1023,6 +1030,10 @@ export class AgentOrchestrator {
       toolArgs,
       state: 'pending',
       attempts: 1,
+      // Risk + permission are computed up front so every task-progress
+      // event carries an honest tier and authorization scope per step.
+      riskTier: riskFor(toolName, toolArgs, config),
+      permissionScope: needsConfirmation ? 'ALLOW_ONCE' : 'ALWAYS_ALLOW',
     };
 
     if (this.currentTask) {
@@ -1039,17 +1050,26 @@ export class AgentOrchestrator {
   }
 
   /**
+   * Whether this tool call must pause for user approval. Single source of
+   * truth for both the confirmation gate and the per-step permission scope.
+   */
+  private stepNeedsConfirmation(name: string, args: Record<string, unknown>, config: AppConfig): boolean {
+    if (!config.agent.requireConfirmation) return false;
+    const toolNeedsConfirmation = this.toolRegistry.requiresConfirmation(name, args);
+    // Pattern-based gate: destructive words inside terminal commands
+    // (rm, sudo, shutdown, ...) always require approval.
+    const command = name === 'terminal' ? String((args.command as string) || '') : '';
+    const patternNeedsConfirmation = matchesAnyPattern(command, config.agent.confirmationPatterns);
+    return toolNeedsConfirmation || patternNeedsConfirmation;
+  }
+
+  /**
    * Check whether the tool call needs user approval and wait for the
    * decision. Denied actions are skipped, never run.
    */
   private async checkConfirmationGate(pc: PendingCall, config: AppConfig): Promise<ToolOutcome> {
     const toolName = pc.call.function.name;
-    const toolNeedsConfirmation = this.toolRegistry.requiresConfirmation(toolName, pc.args);
-    // Additional pattern-based gate from config: destructive words inside
-    // terminal commands (rm, sudo, shutdown, ...) always require approval.
-    const command = toolName === 'terminal' ? String((pc.args.command as string) || '') : '';
-    const patternNeedsConfirmation = matchesAnyPattern(command, config.agent.confirmationPatterns);
-    if (!config.agent.requireConfirmation || (!toolNeedsConfirmation && !patternNeedsConfirmation)) {
+    if (!this.stepNeedsConfirmation(toolName, pc.args, config)) {
       return 'proceed';
     }
 
@@ -1073,7 +1093,13 @@ export class AgentOrchestrator {
     step.state = 'skipped';
     step.result = 'Action denied by user.';
     step.error = 'User denied the confirmation request.';
+    step.permissionScope = 'DENY';
     step.endTime = Date.now();
+    // Denied steps must stay visible too (never hidden): push the updated
+    // task snapshot so the UI shows the DENY scope on the skipped step.
+    if (this.currentPlan && this.currentTask) {
+      this.emit('task-progress', { ...this.currentTask, steps: [...this.currentTask.steps] });
+    }
     this.emit('tool-execution', {
       toolName: call.function.name,
       args,

@@ -9,6 +9,26 @@
 
 Historical sessions below are kept for context (v1.1.1-era notes are superseded — v1.2.0 shipped multi-body registry, local models, OCI, distributed Brain).
 
+## PHASE 4a — RISK TIER + PERMISSION SCOPE PER STEP (2026-09-08)
+
+### What / Why
+The active-task panel now shows a real risk tier (LOW/MEDIUM/HIGH/CRITICAL) and permission scope (ALWAYS_ALLOW/ALLOW_ONCE/DENY) on every step. The audit found the permission model was binary (confirm yes/no) with no risk classification; this adds a single-source-of-truth risk model without replacing the existing gate.
+
+### Changes
+- `server/src/types.ts`: `RiskTier`, `PermissionScope` types; `TaskStep` gains `riskTier`/`permissionScope`.
+- `server/src/tools/index.ts`: `RISK_TIERS` base map + `riskFor(name, args, config)` (filesystem delete/rename → HIGH; terminal matching confirmationPatterns → CRITICAL) + `isHigherRisk`.
+- `server/src/orchestrator/index.ts`: extracted `stepNeedsConfirmation()` (single source of truth for gate + scope); `prepareToolCall` computes risk/scope up front (ALLOW_ONCE when gated, else ALWAYS_ALLOW); `settleDenied` marks DENY and now emits task-progress so denied steps are never hidden.
+- `client/src/utils/store.ts` + `ActiveTaskPanel.tsx`: risk badge (green/yellow/orange/red) + scope chip (AUTO/APPROVED/DENIED) per step row.
+- `server/src/__tests__/risk-permission.test.ts` (NEW): 7 tests — riskFor classification/escalation/ordering + orchestrator integration (CRITICAL+ALLOW_ONCE approved, CRITICAL+DENY skipped, LOW+ALWAYS_ALLOW ungated).
+
+### Evidence
+- Server tsc clean; server suite **326 passed / 1 skipped** (was 319; +7). Client tsc clean; client build clean.
+- **Live probe** against the real backend: safe filesystem list produced `task-progress … completed risk=MEDIUM scope=ALWAYS_ALLOW :: File list: tmp` on the wire (real event → panel). Terminal is deliberately excluded from the deterministic fast path, so live CRITICAL requires an LLM — that path is covered by the deterministic integration tests instead.
+- Denied steps previously emitted NO task-progress (found via test) — fixed so the panel always shows them.
+
+### Remaining
+- Uncommitted (awaiting approval). ALLOW_TASK / ALLOW_SESSION scopes are typed but not yet implemented (current gate is one-shot approvals) — noted in types for future Phase 4 work; UI renders them if they arrive.
+
 ## PHASE 2 — ACTIVE TASK PANEL (2026-09-08)
 
 ### What / Why

@@ -110,6 +110,20 @@ export interface ToolResult {
 }
 
 // Agent Types
+// ── Risk + permission model ────────────────────────────────────
+// Risk tiers classify how dangerous an action is; permission scopes
+// describe how that step was (or must be) authorized. The Brain proposes,
+// the Body validates — these fields make the decision visible at every
+// step of a task instead of hiding it in a binary confirm/no-confirm.
+export type RiskTier = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+export type PermissionScope =
+  | 'ALWAYS_ALLOW'   // safe by policy — runs without asking
+  | 'ALLOW_ONCE'     // user approved this single action
+  | 'ALLOW_TASK'     // approved for the remainder of this task
+  | 'ALLOW_SESSION'  // approved for this session
+  | 'DENY';          // denied by the user (never executed)
+
 export type AgentState = 
   | 'idle'
   | 'thinking'
@@ -141,6 +155,10 @@ export interface TaskStep {
   state: 'pending' | 'executing' | 'completed' | 'failed' | 'skipped' | 'retrying';
   result?: string;
   error?: string;
+  /** Declared danger of this action (LOW/MEDIUM/HIGH/CRITICAL). */
+  riskTier?: RiskTier;
+  /** How this step was authorized (ALWAYS_ALLOW / ALLOW_ONCE / DENY). */
+  permissionScope?: PermissionScope;
 }
 
 // WebSocket Event Types

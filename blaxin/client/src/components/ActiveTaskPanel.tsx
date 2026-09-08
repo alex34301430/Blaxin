@@ -1,5 +1,5 @@
 import React from 'react';
-import { useAppStore, ActiveTask, ActiveTaskStep } from '../utils/store';
+import { useAppStore, ActiveTask, ActiveTaskStep, RiskTier, PermissionScope } from '../utils/store';
 import {
   FiZap, FiTerminal, FiFile, FiGlobe, FiMonitor, FiClipboard, FiSearch,
   FiInfo, FiShield, FiCheckCircle, FiXCircle, FiClock, FiLoader,
@@ -48,6 +48,30 @@ const stepLabels: Record<ActiveTaskStep['state'], string> = {
   skipped: 'SKIPPED',
 };
 
+// Risk tiers — declared danger, color-coded (never invented: server-sent).
+const riskColors: Record<RiskTier, string> = {
+  LOW: 'var(--accent-green)',
+  MEDIUM: 'var(--accent-yellow)',
+  HIGH: '#FF6B35',
+  CRITICAL: 'var(--accent-red)',
+};
+
+// Permission scopes — how this step was authorized.
+const scopeLabels: Record<PermissionScope, string> = {
+  ALWAYS_ALLOW: 'AUTO',
+  ALLOW_ONCE: 'APPROVED',
+  ALLOW_TASK: 'TASK',
+  ALLOW_SESSION: 'SESSION',
+  DENY: 'DENIED',
+};
+const scopeColors: Record<PermissionScope, string> = {
+  ALWAYS_ALLOW: 'var(--text-muted)',
+  ALLOW_ONCE: 'var(--accent-green)',
+  ALLOW_TASK: 'var(--accent-secondary)',
+  ALLOW_SESSION: 'var(--accent-secondary)',
+  DENY: 'var(--accent-red)',
+};
+
 const toolIcons: Record<string, React.ReactNode> = {
   terminal: <FiTerminal size={12} />,
   filesystem: <FiFile size={12} />,
@@ -71,6 +95,8 @@ function StepStateIcon({ state }: { state: ActiveTaskStep['state'] }) {
 
 function StepRow({ step }: { step: ActiveTaskStep }) {
   const color = stepColors[step.state];
+  const riskColor = step.riskTier ? riskColors[step.riskTier] : undefined;
+  const scope = step.permissionScope;
   return (
     <div style={{
       display: 'flex',
@@ -100,18 +126,62 @@ function StepRow({ step }: { step: ActiveTaskStep }) {
           {step.description}
         </div>
         <div style={{
-          fontSize: 9,
-          color,
-          textTransform: 'uppercase',
-          letterSpacing: 0.5,
-          fontFamily: 'var(--font-mono)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 6,
           marginTop: 2,
           overflow: 'hidden',
-          textOverflow: 'ellipsis',
           whiteSpace: 'nowrap',
         }}>
-          {stepLabels[step.state]}{step.toolName ? ` · ${step.toolName}` : ''}
-          {step.state === 'skipped' && step.error ? ' — ' + step.error : ''}
+          <span style={{
+            fontSize: 9,
+            color,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+            fontFamily: 'var(--font-mono)',
+          }}>
+            {stepLabels[step.state]}
+          </span>
+          {step.toolName && (
+            <span style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+              · {step.toolName}
+            </span>
+          )}
+          {/* Risk tier — real server-computed value */}
+          {step.riskTier && (
+            <span style={{
+              fontSize: 8,
+              letterSpacing: 0.5,
+              fontFamily: 'var(--font-mono)',
+              color: riskColor,
+              border: `1px solid ${riskColor}55`,
+              borderRadius: 'var(--radius-sm)',
+              padding: '0 4px',
+              lineHeight: '14px',
+            }}>
+              {step.riskTier}
+            </span>
+          )}
+          {/* Permission scope — how this step was authorized */}
+          {scope && (
+            <span style={{
+              fontSize: 8,
+              letterSpacing: 0.5,
+              fontFamily: 'var(--font-mono)',
+              color: scopeColors[scope],
+              border: `1px solid ${scopeColors[scope]}55`,
+              borderRadius: 'var(--radius-sm)',
+              padding: '0 4px',
+              lineHeight: '14px',
+            }}>
+              {scopeLabels[scope]}
+            </span>
+          )}
+          {step.state === 'skipped' && step.error && (
+            <span style={{ fontSize: 9, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+              — {step.error}
+            </span>
+          )}
         </div>
       </div>
     </div>

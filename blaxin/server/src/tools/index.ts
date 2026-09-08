@@ -1,4 +1,6 @@
-import { Tool, ToolDefinition, ToolResult } from '../types.js';
+import { Tool, ToolDefinition, ToolResult, RiskTier } from '../types.js';
+import { matchesAnyPattern } from '../utils/config.js';
+import type { AppConfig } from '../types.js';
 import { TerminalTool } from './terminal.js';
 import { FileSystemTool } from './filesystem.js';
 import { ScreenshotTool } from './screenshot.js';
@@ -115,3 +117,49 @@ export class ToolRegistry {
 }
 
 export const toolRegistry = new ToolRegistry();
+
+// ── Risk classification ────────────────────────────────────────
+// Declared base tier per capability; argument-level escalation happens in
+// riskFor(). This is the single source of truth for step risk tiers.
+const RISK_TIERS: Record<string, RiskTier> = {
+  'system-info': 'LOW',
+  search: 'LOW',
+  clipboard: 'LOW',
+  screenshot: 'MEDIUM', // captures the screen (privacy)
+  browser: 'MEDIUM',
+  filesystem: 'MEDIUM',
+  terminal: 'MEDIUM',
+  'computer-control': 'MEDIUM',
+};
+
+const DEFAULT_RISK_TIER: RiskTier = 'MEDIUM';
+
+/**
+ * Risk tier for a tool invocation. Base tier comes from the capability;
+ * dangerous arguments escalate it (destructive filesystem ops, destructive
+ * terminal commands matching the confirmation patterns).
+ */
+export function riskFor(name: string, args: Record<string, unknown>, config?: AppConfig): RiskTier {
+  const base = RISK_TIERS[name] ?? DEFAULT_RISK_TIER;
+  switch (name) {
+    case 'filesystem': {
+      const op = String(args.operation || '');
+      if (op === 'delete' || op === 'rename') return 'HIGH';
+      return base;
+    }
+    case 'terminal': {
+      const command = String(args.command || '');
+      if (config && matchesAnyPattern(command, config.agent.confirmationPatterns)) return 'CRITICAL';
+      return base;
+    }
+    default:
+      return base;
+  }
+}
+
+/** All risk tiers in ascending danger order (for validation/UI). */
+export const RISK_TIERS_ORDER: RiskTier[] = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
+
+export function isHigherRisk(a: RiskTier, b: RiskTier): boolean {
+  return RISK_TIERS_ORDER.indexOf(a) > RISK_TIERS_ORDER.indexOf(b);
+}

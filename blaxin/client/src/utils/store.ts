@@ -18,6 +18,10 @@ export interface ToolExecution {
 }
 
 /** Mirrors the server's AgentTask/TaskStep shapes (task-progress events). */
+export type RiskTier = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+
+export type PermissionScope = 'ALWAYS_ALLOW' | 'ALLOW_ONCE' | 'ALLOW_TASK' | 'ALLOW_SESSION' | 'DENY';
+
 export interface ActiveTaskStep {
   id: string;
   description: string;
@@ -25,6 +29,10 @@ export interface ActiveTaskStep {
   state: 'pending' | 'executing' | 'completed' | 'failed' | 'skipped' | 'retrying';
   result?: string;
   error?: string;
+  /** Declared danger of this action (server-computed). */
+  riskTier?: RiskTier;
+  /** How this step was authorized (server-computed). */
+  permissionScope?: PermissionScope;
 }
 
 export interface ActiveTask {
