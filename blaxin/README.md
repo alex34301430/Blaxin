@@ -50,7 +50,9 @@ The standalone Brain runs the real LLM path: configure its provider and model wi
 - **Free Model Detection**: Identifies and recommends free models
 - **Local Models (v1.2.0)**: real hardware discovery (CPU/RAM/GPU/VRAM/disk/arch), a maintainable model catalog, and deterministic recommendation with honest warnings — BLAXIN never invents benchmarks or shows an unearned READY
 - **Oracle Cloud Models (v1.2.0)**: connect an OCI account (RSA-SHA256 signed API, credentials encrypted at rest), discover real shapes/quotas/instances, and provision a resumable, cancellable inference node whose model endpoint reaches the Brain over a loopback SSH tunnel — never a public port
-- **Agent Task Engine**: state machine, step tracking, retry/backoff, provider fallback, loop detection, confirmation gate for high-impact tool actions, and a sequential task queue
+- **Agent Task Engine**: state machine, step tracking, retry/backoff, provider fallback, loop detection, confirmation gate for high-impact tool actions, and a persistent task queue with priorities, dependency gating and pause/resume/cancel (survives restarts)
+- **Missions (v1.4.0)**: multi-step persistent missions with per-step checkpoints — pause and resume from the last completed checkpoint, retry only failed steps, real progress 0-1
+- **Jarvis HUD (v1.4.0)**: the approved `design/blaxin_os.html` command-center interface, fully functional: boot overlay gated on the real backend connection, neural status, memory bank, live task queue with actions, 5-tab agent terminal (real event stream + slash-command composer), network hub (real RX/TX telemetry), security vault (real persisted security log), activity ticker. Commands: `/help /status /clear /stop /memory /queue /missions /mission-new /version`
 - **Task Memory**: persistent, searchable, deletable memory that never stores secrets
 - **Desktop Control**: Mouse, keyboard, window management via xdotool/ydotool
 - **File System**: Read, write, create, delete files and directories (protected against system/credential paths)

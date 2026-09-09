@@ -1,5 +1,83 @@
 # BLAXIN Engineering Mission — Continuation State
 
+## SESSION — BLAXIN→JARVIS TRANSFORMATION (2026-09-09, PART 1: BACKEND COMPLETE)
+
+### Directive
+Transform BLAXIN into a personal Jarvis assistant. `blaxin_os.html` (found at
+`/home/tsn/Videos/blaxin_os.html` AND `/home/tsn/Downloads/blaxin_os(1).html`,
+identical MD5) is the APPROVED UI/UX source of truth. Copy preserved at
+`blaxin/design/blaxin_os.html` (reference only, not part of the app build).
+
+### BACKEND — COMPLETE + VERIFIED (53/53 new/updated tests pass; full suite 393+
+passing, only the two documented wss-transport/brain-integration timing flakes)
+- `server/src/utils/task-queue.ts` (NEW): persistent queue — priority 1-5,
+  dependsOn gating, pause/resume/cancel, requeue-on-restart, change events.
+- `server/src/utils/missions.ts` (NEW): persistent missions — explicit steps,
+  per-step CHECKPOINTS, pause/resume-from-last-checkpoint, retry(failed only),
+  progress 0-1, history/error logs. Mid-flight missions re-pause on restart.
+- `server/src/utils/scheduler.ts` (NEW): JarvisScheduler — single path feeding
+  the orchestrator; settles queue tasks + mission steps on REAL agent-state /
+  task-complete events (completed/error/idle mapping, never guessed); pump()
+  advances queued missions then runs highest-priority eligible task.
+- `server/src/router/commands.ts` (NEW): deterministic slash commands
+  (/help /status /clear /stop /memory /queue /missions /mission-new /version).
+- `server/src/router/direct.ts`: SITE_ALIASES (youtube/gmail/github/… → URL),
+  so "open youtube" is a browser action, not an app-launch guess.
+- `server/src/utils/security-log.ts` (NEW): bounded persisted security event
+  ring; wired at origin blocks, WS upgrade blocks, key save/remove.
+- `server/src/utils/system-telemetry.ts`: `getNetworkTelemetry()` — real
+  /proc/net/dev RX/TX byte deltas. New GET /api/system/network.
+- `server/src/index.ts`: queue/mission/security/status REST + WS message types
+  (command, queue-*, mission-*); connected payload now includes deviceId +
+  queue/mission/security snapshots; embedded-mode user messages route through
+  the queue→scheduler→orchestrator; securityLog.onChange → 'security-events'.
+- New tests: task-queue (12), missions (13), scheduler (8), commands (9),
+  security-log (4), network telemetry (1), direct-router aliases (1).
+
+### FRONTEND — COMPLETE (2026-09-09, session 2)
+All items of the phase-2 plan are implemented and verified:
+- `client/src/hooks/useWebSocket.ts`: queue-updated/mission-progress/
+  security-events handlers; connected payload stores real deviceId;
+  bootComplete set on FIRST connect (subscribed, once); activityFeed fed
+  from agent-message/agent-state/tool-execution/activity/error/
+  task-complete/confirmation-required; sendCommand + enqueueTask +
+  queueAction + createMission + missionAction senders.
+- `client/src/theme/jarvis.css` (NEW ~450 lines): full token + component
+  port of blaxin_os.html (jh-* namespace; Orbitron/Share Tech Mono loaded
+  in client/index.html; reduced-motion honored).
+- `client/src/components/hud/`: BootOverlay (real-state gated; leaves on
+  connected+bootComplete), ParticleCanvas (reduced-motion aware), HudHeader
+  (brand/wave/ONLINE pill/session timer/real BLX- deviceId/queue count/
+  audio mute+volume), Panel (shared chrome), NeuralStatusPanel (real agent
+  state + task progress + context), MemoryBankPanel (real GET /api/memory
+  15s poll), TaskQueuePanel (real queue table + cancel/pause/resume),
+  AgentTerminalPanel (5 tabs, real event stream, [role=status] second in
+  DOM, composer 'Message BLAXIN'/'Send message', mic, STOP/CLR),
+  NetworkHubPanel (real /api/system/network RX/TX graph + connection list),
+  SecurityVaultPanel (real security-events log), ActivityTicker (real
+  feed), HudView (20%/1fr/24% grid + header + bottom rail).
+- `client/src/App.tsx`: chat page renders HudView (StatusBar kept above;
+  ActiveTaskPanel inside HudView center column, hidden when no task;
+  all other pages untouched).
+- E2E: `e2e/tests/hud-verify.spec.ts` (NEW): boot leaves on real connect,
+  all 6 panels + ticker visible, deviceId BLX-*, /status command round-trip
+  renders 'AGENT STATE' in the terminal. Full suite 8/8 PASS.
+- Visual proof: hud-boot/live/task screenshots captured via Playwright
+  against the real backend (/tmp/blaxin-hud-probe/).
+- Version 1.4.0 everywhere: VERSION, server+client package.json
+  (+lockfiles), tauri.conf.json, Cargo.toml+lock, version.ts, Sidebar
+  label, resources/blaxin-server/package.json.
+
+### Recover-from-here facts
+- Branch main, working tree has the changes listed above (uncommitted on
+  purpose — session interrupted before frontend completion).
+- Original design files NOT modified (~/Videos + ~/Downloads untouched).
+- Server: `cd blaxin/server && npx tsc --noEmit && npx vitest run`.
+- Client: `cd blaxin/client && npx tsc -b && npx vite build`.
+- E2E: `cd blaxin/e2e && npm test`.
+
+---
+
 ## CURRENT STATE
 - **Date**: 2026-09-09
 - **Branch**: main
