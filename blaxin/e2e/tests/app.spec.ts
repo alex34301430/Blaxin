@@ -140,6 +140,29 @@ test('JARVIS audio identity: mute + volume persist across reload', async ({ page
   await expect(page.getByRole('slider', { name: 'JARVIS sound volume' })).toHaveValue('35');
 });
 
+test('setup wizard: is a full dialog and Escape does not dismiss first-run setup', async ({ page, browser }) => {
+  // Fresh context: no 'blaxin-setup-complete' flag → the real wizard shows.
+  const context = await browser.newContext();
+  const fresh = await context.newPage();
+  await fresh.goto('/');
+
+  const dialog = fresh.getByRole('dialog', { name: 'BLAXIN' });
+  await expect(dialog).toBeVisible();
+
+  // Focus moved into the dialog on open.
+  const inside = dialog.locator(
+    'button:enabled, input:enabled, [tabindex="0"]:enabled',
+  );
+  await expect(inside.first()).toBeFocused();
+
+  // First-run setup must be completed — Escape intentionally does not
+  // dismiss the wizard.
+  await fresh.keyboard.press('Escape');
+  await expect(dialog).toBeVisible();
+
+  await context.close();
+});
+
 test('memory page: save a durable note and delete it (real API)', async ({ page }) => {
   await openApp(page);
   await waitLive(page);
