@@ -21,7 +21,8 @@
 
 ### 3. E2E in CI (previously suggested follow-up) — PASS
 - `.github/workflows/e2e.yml` (NEW): real-stack Playwright on push/PR touching server/client/e2e; ubuntu-22.04 runner, preinstalled Chrome (no browser downloads), sandbox **enabled** (no `--no-sandbox`; config only adds it behind explicit `BLAXIN_E2E_NO_SANDBOX=1` for sandboxless container hosts), server+client builds gate the run, failure artifacts uploaded (7 days). YAML validated. `npm ci` verified against committed e2e lockfile.
-- Local proof: full suite passes **with the Chrome sandbox enabled**: **6/6 in 13.3s**.
+- Local proof: full suite passes **with the Chrome sandbox enabled**: **7/7 in 12.3s** (6 core tests + first-run SetupWizard dialog contract via a fresh context: focus inside, Escape does NOT dismiss).
+- **CI-verified**: the new workflow's first real run on main completed `success` in 56s (sandboxed, real backend + vite + runner Chrome).
 
 ### 4. Confirmation-gate + dialog a11y e2e (follow-ups: modal/permission verification) — PASS
 - `useDialogA11y` hook (NEW): initial focus (explicit target → first focusable → container), Tab/Shift+Tab focus trap, optional Escape-close, focus restore.
