@@ -1,5 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useRef } from 'react';
 import { useAppStore } from '../utils/store';
+import { useDialogA11y } from '../hooks/useDialogA11y';
 import { FiAlertTriangle, FiCheck, FiX, FiShield } from 'react-icons/fi';
 
 /**
@@ -16,35 +17,20 @@ export function ConfirmationModal({
 }) {
   const { pendingConfirmation, agentState } = useAppStore();
   const cancelRef = useRef<HTMLButtonElement>(null);
-  const lastFocusedRef = useRef<Element | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const onRespondRef = useRef(onRespond);
-  useEffect(() => { onRespondRef.current = onRespond; }, [onRespond]);
+  onRespondRef.current = onRespond;
 
-  useEffect(() => {
-    if (!pendingConfirmation) return;
-
-    // Remember what had focus so we can give it back when the dialog
-    // closes (keyboard users should not be stranded after approving).
-    lastFocusedRef.current = document.activeElement;
-    cancelRef.current?.focus();
-
-    // Escape denies: the safe, non-executing choice. Enter activates the
-    // focused button, so the default (focus lands on Deny) never approves
-    // a high-impact action by accident.
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        onRespondRef.current(false);
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => {
-      window.removeEventListener('keydown', onKey);
-      const prev = lastFocusedRef.current;
-      lastFocusedRef.current = null;
-      if (prev instanceof HTMLElement) prev.focus();
-    };
-  }, [pendingConfirmation]);
+  // Shared dialog semantics: focus starts on Deny, Tab stays inside the
+  // dialog, focus is restored when it closes. Escape DENIES: the safe,
+  // non-executing choice. Enter activates the focused button, so the
+  // default (focus lands on Deny) never approves a high-impact action by
+  // accident.
+  useDialogA11y(dialogRef, {
+    onClose: () => onRespondRef.current(false),
+    initialFocusRef: cancelRef,
+    enabled: !!pendingConfirmation,
+  });
 
   if (!pendingConfirmation) return null;
 
@@ -79,10 +65,12 @@ export function ConfirmationModal({
       }}
     >
       <div
+        ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="confirmation-title"
         aria-describedby="confirmation-description"
+        tabIndex={-1}
         style={{
           width: 520,
           maxWidth: '90vw',

@@ -98,7 +98,7 @@ function StepRow({ step }: { step: ActiveTaskStep }) {
   const riskColor = step.riskTier ? riskColors[step.riskTier] : undefined;
   const scope = step.permissionScope;
   return (
-    <div style={{
+    <div data-testid="active-task-step" style={{
       display: 'flex',
       alignItems: 'flex-start',
       gap: 8,

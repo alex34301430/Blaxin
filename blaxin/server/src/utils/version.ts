@@ -1,6 +1,6 @@
 // BLAXIN Version
 // Keep consistent across server, client, and Tauri
-export const APP_VERSION = '1.2.0';
+export const APP_VERSION = '1.3.0';
 export const APP_NAME = 'BLAXIN';
 export const GITHUB_REPO = 'tasinxxx/Blaxin';
 export const GITHUB_RELEASES_URL = `https://api.github.com/repos/${GITHUB_REPO}/releases/latest`;

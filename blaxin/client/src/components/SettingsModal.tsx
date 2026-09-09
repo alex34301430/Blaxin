@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAppStore, ProviderStatus, ModelInfo } from '../utils/store';
+import { useDialogA11y } from '../hooks/useDialogA11y';
 import { api } from '../services/api';
 import { 
   FiX, FiKey, FiCpu, FiTool, FiShield, FiMonitor, 
@@ -26,6 +27,10 @@ export function SettingsModal() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  // Full dialog semantics: initial focus, focus trap, Escape closes,
+  // focus restore (shared hook — same behavior as the setup wizard).
+  useDialogA11y(dialogRef, { onClose: () => setSettingsOpen(false) });
 
   useEffect(() => {
     loadProviders();
@@ -59,7 +64,12 @@ export function SettingsModal() {
       justifyContent: 'center',
       zIndex: 100,
     }}>
-      <div style={{
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="settings-title"
+        style={{
         width: 900,
         maxWidth: '90vw',
         height: '80vh',
@@ -83,7 +93,7 @@ export function SettingsModal() {
             borderBottom: '1px solid var(--border-subtle)',
             marginBottom: 8,
           }}>
-            <div style={{
+            <div id="settings-title" style={{
               fontSize: 16,
               fontWeight: 700,
               fontFamily: 'var(--font-mono)',
@@ -119,6 +129,7 @@ export function SettingsModal() {
 
           <button
             onClick={() => setSettingsOpen(false)}
+            aria-label="Close settings"
             style={{
               display: 'flex',
               alignItems: 'center',
@@ -806,12 +817,20 @@ function ModelRow({ model, isActive, isRecommended, onSelect, onInfo }: {
 function ModelDetailModal({ model, onClose, onSelect, isActive }: {
   model: ModelInfo; onClose: () => void; onSelect: (m: ModelInfo) => void; isActive: boolean;
 }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogA11y(dialogRef, { onClose });
+
   return (
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
       display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200,
     }} onClick={onClose}>
-      <div style={{
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Details for ${model.name}`}
+        style={{
         width: 500, maxWidth: '90vw', background: 'var(--bg-secondary)',
         border: '1px solid var(--border-primary)', borderRadius: 'var(--radius-xl)',
         padding: 24, boxShadow: '0 0 40px rgba(0,240,255,0.1)',
@@ -821,7 +840,7 @@ function ModelDetailModal({ model, onClose, onSelect, isActive }: {
             <div style={{ fontSize: 18, fontWeight: 600, color: 'var(--text-primary)' }}>{model.name}</div>
             <div style={{ fontSize: 12, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{model.id}</div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}><FiX size={18} /></button>
+          <button onClick={onClose} aria-label="Close model details" style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}><FiX size={18} /></button>
         </div>
 
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>

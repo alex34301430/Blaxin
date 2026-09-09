@@ -15,6 +15,10 @@ so the full UI → WebSocket → agent loop → UI pipeline is exercised for rea
 - Google Chrome on `PATH` (config falls back through Playwright's channel lookup)
 - `npm install` in this directory (one time)
 
+The Chrome **sandbox stays enabled**. The `--no-sandbox` escape hatch only
+activates when `BLAXIN_E2E_NO_SANDBOX=1` is set explicitly (sandboxless
+container hosts with user namespaces blocked); CI runs sandboxed.
+
 ## Run
 
 ```bash
@@ -32,7 +36,21 @@ Set `CI=1` to retry flaky tests once.
 2. A real safe task ("list the contents of /tmp") completes end to end, and
    both live regions (`role=status` in the StatusBar and the chat) announce
    the real transitions and the reply.
-3. The Memory page saves and deletes a durable note through the real API.
+3. The real **confirmation gate**: "open https://example.com/" hits the fast
+   path and the browser tool's approval gate. The modal's safe default is
+   asserted (focus on Deny), Escape denies, and the step lands DENIED +
+   SKIPPED — the action never executes.
+4. The **Settings dialog** a11y contract: focus moves in on open, Tab stays
+   trapped inside, Escape closes, focus returns to the opener.
+5. **JARVIS audio identity** persistence: mute state and clamped volume
+   survive a real page reload (localStorage-backed store).
+6. The Memory page saves and deletes a durable note through the real API.
+
+## CI
+
+`.github/workflows/e2e.yml` runs the same suite on every push/PR that
+touches server, client, or e2e code (ubuntu-22.04 runner, preinstalled
+Chrome, sandboxed, both real webServers, failure artifacts uploaded).
 
 ## Notes
 

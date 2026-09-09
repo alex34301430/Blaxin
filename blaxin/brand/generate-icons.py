@@ -2,7 +2,7 @@
 # ═══════════════════════════════════════════════════════════════════════
 # BLAXIN — Official brand asset + application icon generator
 #
-# Source of truth: blaxin/brand/blaxin-logo-source.jpeg
+# Source of truth: blaxin/brand/blaxin-logo-source.png
 # (the official "Modern Letter B" geometric brand mark: white B on black)
 #
 # Usage:
@@ -32,7 +32,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BRAND_DIR = REPO_ROOT / "brand"
-SOURCE = BRAND_DIR / "blaxin-logo-source.jpeg"
+SOURCE = BRAND_DIR / "blaxin-logo-source.png"
 
 ICONS_DIR = REPO_ROOT / "src-tauri" / "icons"
 CLIENT_PUBLIC = REPO_ROOT / "client" / "public"
@@ -58,21 +58,27 @@ def load_source() -> Image.Image:
     """Load the official logo. Never edit the design itself."""
     if not SOURCE.is_file():
         fail(f"official logo source not found: {SOURCE}")
-    return Image.open(SOURCE)
+    img = Image.open(SOURCE)
+    img.load()
+    return img
 
 
 def mark_rgba(src: Image.Image, size: int) -> Image.Image:
     """
-    The source is a JPEG: the mark sits on an opaque black square.
-    For icon usage the black background becomes a transparent alpha
-    channel (derived from luminance — this preserves the logo exactly:
-    the white B and all anti-aliased edges stay untouched; only the
-    pure-black backing square is made transparent).
+    The source is an opaque square (black canvas, white mark). For icon
+    usage the black background becomes a transparent alpha channel
+    (derived from luminance — this preserves the logo exactly: the white
+    B and all anti-aliased edges stay untouched; only the pure-black
+    backing square is made transparent).
+    If the source ever ships a real alpha channel, it is honored as-is.
     """
-    rgb = src.convert("RGB")
-    alpha = rgb.convert("L").point(lambda v: 255 if v >= 8 else 0)
-    rgba = rgb.copy().convert("RGBA")
-    rgba.putalpha(alpha)
+    if "A" in src.getbands():
+        rgba = src.convert("RGBA")
+    else:
+        rgb = src.convert("RGB")
+        alpha = rgb.convert("L").point(lambda v: 255 if v >= 8 else 0)
+        rgba = rgb.copy().convert("RGBA")
+        rgba.putalpha(alpha)
 
     # Tight-crop the mark itself so it fills the icon canvas cleanly.
     bbox = alpha.getbbox()

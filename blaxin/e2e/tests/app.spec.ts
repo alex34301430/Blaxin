@@ -58,6 +58,88 @@ test('runs a real safe task end to end and announces it via live regions', async
   await expect(page.getByText('DONE', { exact: true }).first()).toBeVisible({ timeout: 20_000 });
 });
 
+test('confirmation gate: denying a gated action via Escape never executes it', async ({ page }) => {
+  await openApp(page);
+  await waitLive(page);
+
+  // "open <url>" hits the deterministic fast path (no provider needed) and
+  // the browser tool gates open_url — a REAL confirmation event, no mock.
+  const input = page.getByLabel('Message BLAXIN');
+  await input.fill('open https://example.com/');
+  await page.getByRole('button', { name: 'Send message' }).click();
+
+  // The safety-critical dialog appears with the safe default: focus lands
+  // on Deny, so a blind Enter can never approve a high-impact action.
+  const dialog = page.getByRole('dialog', { name: 'BLAXIN needs your approval' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Deny' })).toBeFocused();
+
+  // Escape is the documented deny path.
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+
+  // The step is recorded as DENIED and SKIPPED — executed for no one.
+  await expect(
+    page.getByTestId('active-task-step').filter({ hasText: 'DENIED' }),
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(
+    page.getByTestId('active-task-step').filter({ hasText: 'SKIPPED' }),
+  ).toBeVisible({ timeout: 15_000 });
+
+  // Focus goes back to the page (restore), and the input is usable again.
+  await expect(input).toBeEnabled();
+});
+
+test('settings dialog: focus trap, Escape closes, focus is restored', async ({ page }) => {
+  await openApp(page);
+  await waitLive(page);
+
+  await page.getByRole('button', { name: 'Settings' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await expect(dialog).toBeVisible();
+
+  // Focus moved into the dialog on open.
+  const inside = dialog.locator(
+    'button:enabled, input:enabled, select:enabled, [tabindex="0"]:enabled',
+  );
+  await expect(inside.first()).toBeFocused();
+
+  // Tab keeps focus inside the dialog (trap).
+  await page.keyboard.press('Tab');
+  await page.keyboard.press('Tab');
+  const focusedId = await page.evaluate(() =>
+    (document.activeElement as HTMLElement | null)?.closest('[role="dialog"]') !== null,
+  );
+  expect(focusedId).toBe(true);
+
+  // Escape closes and restores focus to the opener.
+  await page.keyboard.press('Escape');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Settings' })).toBeFocused();
+});
+
+test('JARVIS audio identity: mute + volume persist across reload', async ({ page }) => {
+  await openApp(page);
+  await waitLive(page);
+
+  const mute = page.getByRole('button', { name: 'Mute JARVIS sounds' });
+  await mute.click();
+  // aria-pressed reflects the real audioEnabled state (now muted).
+  await expect(page.getByRole('button', { name: 'Unmute JARVIS sounds' })).toHaveAttribute(
+    'aria-pressed', 'false',
+  );
+
+  const volume = page.getByRole('slider', { name: 'JARVIS sound volume' });
+  await volume.fill('35');
+
+  await page.reload();
+  await waitLive(page);
+
+  // Persisted: muted flag and clamped volume survive a real reload.
+  await expect(page.getByRole('button', { name: 'Unmute JARVIS sounds' })).toBeVisible();
+  await expect(page.getByRole('slider', { name: 'JARVIS sound volume' })).toHaveValue('35');
+});
+
 test('memory page: save a durable note and delete it (real API)', async ({ page }) => {
   await openApp(page);
   await waitLive(page);

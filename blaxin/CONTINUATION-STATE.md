@@ -1,11 +1,62 @@
 # BLAXIN Engineering Mission — Continuation State
 
 ## CURRENT STATE
-- **Date**: 2026-09-08
+- **Date**: 2026-09-09
 - **Branch**: main
-- **HEAD**: 90cf6e4 (before Phase 1 work; see "PHASE 1 — REPO IDENTITY CANONICALIZATION" below)
-- **Version**: 1.2.0 (tag v1.2.0 released; all in-repo version sources agree on 1.2.0)
-- **Mission Status**: **Phase 1 (canonicalize repo identity) implemented and verified locally, not yet committed.** All `alex34301430/Blaxin` references canonicalized to `tasinxxx/Blaxin` (or `${{ github.repository }}` in CI) across server, Rust updater, Tauri config, release workflow/script, installer, manifest + validator; `vv1.2.0` notes typo fixed; `.secrets/update-signing-key.txt` hardened to 0600. Verified: no stale refs remain in source, latest.json passes its validator, server tsc clean, server tests 310/311 (1 pre-existing wss-transport timing flake that passes in isolation), client build clean, `cargo check` clean. Awaiting commit per workflow (user approves commits).
+- **Version**: 1.3.0 (all in-repo version sources bumped; release pending)
+- **Mission Status**: **v1.3.0 RELEASE READINESS COMPLETE — all engineering done and verified locally; awaiting final commit → push → tag v1.3.0 (CI builds/signs/publishes).** See the v1.3.0 session block below for full evidence.
+
+## SESSION — v1.3.0 COMPLETION + BRANDING + IDENTITY (2026-09-09)
+
+### 1. GitHub identity audit (directive §7–13) — PASS
+- Repository-wide search for `alex34301430`: **0 active references**. Only 2 historical mentions remain in this progress file (preserved deliberately per §13).
+- Remote = `https://github.com/tasinxxx/Blaxin.git` (verified `git remote -v`). Updater endpoints, `install.sh`, `latest.json`, release workflow (`${{ github.repository }}` — self-healing) all canonical.
+- **Quick install chain verified live**: raw install.sh → HTTP 200 from canonical repo; GitHub API rate-limited (403) from this machine, so verified via direct asset URLs: v1.2.0 `.deb` (42,310,676 B) and AppImage (115,800,568 B) both downloadable from `github.com/tasinxxx/Blaxin/releases/download/…`; installer is Debian-family-aware (`.deb` preferred on Kali/Debian/Ubuntu).
+
+### 2. New BLAXIN logo (directive §5–6) — PASS
+- Source of truth swapped: `~/Downloads/Blaxin logo.png` (1254×1254 PNG, black canvas, blue mark) → `blaxin/brand/blaxin-logo-source.png` (replaces the old `.jpeg`).
+- `brand/generate-icons.py` updated (PNG source; honors real alpha if a future asset ships one; luminance-keying retained for opaque sources). Docs updated (branding.md, README).
+- **8 derived assets regenerated**: brand mark / mark-dark / wordmark, 4 Tauri icons (32/128/256/512), client favicon + in-app mark (`blaxin-mark.png`). Pixel-verified: mean visible RGB ≈ [14,66,130] (the new logo's blue) across all derived assets.
+- **Packaged-app visual verification** (not just file existence): built v1.3.0 `.deb`, extracted, launched on DISPLAY=:0.0, captured the real window (`import`), OCR shows `BLAXIN` wordmark; pixel analysis shows 1,130–1,465 blue-dominant logo pixels in the sidebar region and **0 white pixels** (old white-on-black logo fully replaced).
+
+### 3. E2E in CI (previously suggested follow-up) — PASS
+- `.github/workflows/e2e.yml` (NEW): real-stack Playwright on push/PR touching server/client/e2e; ubuntu-22.04 runner, preinstalled Chrome (no browser downloads), sandbox **enabled** (no `--no-sandbox`; config only adds it behind explicit `BLAXIN_E2E_NO_SANDBOX=1` for sandboxless container hosts), server+client builds gate the run, failure artifacts uploaded (7 days). YAML validated. `npm ci` verified against committed e2e lockfile.
+- Local proof: full suite passes **with the Chrome sandbox enabled**: **6/6 in 13.3s**.
+
+### 4. Confirmation-gate + dialog a11y e2e (follow-ups: modal/permission verification) — PASS
+- `useDialogA11y` hook (NEW): initial focus (explicit target → first focusable → container), Tab/Shift+Tab focus trap, optional Escape-close, focus restore.
+- `SettingsModal` + `ModelDetailModal` + `SetupWizard` now full dialogs (`role=dialog`, `aria-modal`, labelled). Wizard: Escape does NOT dismiss (first-run must complete); Settings/ModelDetail: Escape closes. ConfirmationModal refactored onto the same hook (Escape→Deny safe default preserved).
+- **New e2e test drives the REAL permission gate**: "open https://example.com/" hits the fast path + browser tool's `open_url` gate → real `confirmation-required`; asserts focus lands on Deny (Enter can never blindly approve), Escape denies, step lands **DENIED + SKIPPED** (nothing executes). The approval path stays covered by deterministic server tests (executing a browser open in e2e would launch a real browser window on the host).
+- Audio-identity e2e: mute via real button (aria-pressed flips), volume slider (name from pre-existing `aria-label`), reload → both persist (localStorage-backed store).
+- `ActiveTaskPanel` step rows carry `data-testid="active-task-step"`.
+
+### 5. Test hardening (load-induced waits, not logic changes)
+- `brain-integration.test.ts`: identity-reconnect waits 10s → 20s; `wss-transport.test.ts`: WSS handshake waits 25s → 40s (observed 25.3s wall-clock under load 7 on this 8-core desktop; bounded — real hangs still fail).
+- **Final server suite: 353 passed / 1 skipped, 0 failed (11.3s)**. Client `tsc -b && vite build` clean. `cargo check` clean (blaxin v1.3.0).
+
+### 6. Version 1.3.0 (directive §26) — PASS
+- All 7 active sources bumped: `blaxin/VERSION`, server+client `package.json` (lockfiles via npm version), `tauri.conf.json`, `Cargo.toml` (+Cargo.lock), `server/src/utils/version.ts`, Sidebar label. `grep 1\.2\.0` across those files: no matches. Bundled `resources/blaxin-server/package.json` = 1.3.0.
+
+### 7. Fresh .deb production build + runtime verification (§20, §27) — PASS
+- `cargo tauri build --bundles deb` → **`BLAXIN_1.3.0_amd64.deb` (39,734,550 B)**; trailing error is only the updater-signing step (needs CI-held `TAURI_SIGNING_PRIVATE_KEY`) — deb complete, documented behavior since v1.1.1.
+- Runtime (dpkg-deb -x extraction; real `dpkg -i` still blocked: sudo needs a password): bundled node v20.18.0 + server found; `/api/health` → `{"status":"ok","version":"1.3.0"}`; updater self-check `available=false latest=1.3.0`.
+- **Safe task through the packaged server**: WS probe → `filesystem list /tmp` → executing → tool-execution completed → agent-state completed → `task-complete {kind:direct, totalMs:4, modelCalls:0, toolCalls:1}`. Window OCR after task: `LIVE · DONE`, `COMPLETED`, real `/tmp` listing rendered in chat. New logo visible (see §2).
+- Relaunch hygiene exercised repeatedly (single-instance lock + clean restarts between verification rounds).
+- Process-tree gotcha found during verification (self-inflicted, no repo impact): `pkill -f` patterns matching the invoking shell's own cmdline killed the launcher — use bracketed patterns (`usr/bi[n]/blaxin`) or split-string construction; keep launch + probe in the same command block or the GUI process is lost when its parent shell exits.
+
+### Release-critical items NOT done here (deliberate)
+- Real `dpkg -i` (sudo password needed) — same documented limitation as v1.1.1/v1.2.0; extraction-run covers the same resource-resolution path.
+- AppImage rebuild — not attempted locally this session; CI builds AppImage+deb on the tag. The deb is the supported Debian-family channel (AppImage EGL blank-window issue documented).
+- Live LLM round trip / physical audio / screen reader — still environment-blocked (no provider key, headless audio, no SR); covered by deterministic tests as before.
+
+## NEXT SESSION STEPS (if this one ends before release)
+1. Commit all working-tree changes (logically grouped), push to main.
+2. `git tag v1.3.0 && git push origin v1.3.0` — CI release.yml builds AppImage+deb, signs, generates latest.json, publishes the release, commits latest.json back.
+3. Post-release: verify `raw.githubusercontent.com/tasinxxx/Blaxin/main/blaxin/update/latest.json` shows 1.3.0 and the quick-install one-liner installs it.
+
+---
+
+## PREVIOUS STATE (v1.3.0 work start)
 
 Historical sessions below are kept for context (v1.1.1-era notes are superseded — v1.2.0 shipped multi-body registry, local models, OCI, distributed Brain).
 

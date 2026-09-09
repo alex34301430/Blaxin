@@ -123,7 +123,10 @@ describe('brain ↔ body over WSS (real TLS)', () => {
     driver.connect(code);
     // 25s budget: under full-suite parallel load real TLS handshakes can
     // take many seconds; vitest's ceiling is 30s (see vitest.config.ts).
-    await waitFor(() => driver.isReady(), 25_000, 'CONNECTED over WSS');
+    // 40s: real-TLS handshake + Ed25519 chain under a loaded machine can
+    // legitimately approach 30s wall-clock (observed at 25.3s); still bounded
+    // — a genuine hang fails, just slower.
+    await waitFor(() => driver.isReady(), 40_000, 'CONNECTED over WSS');
     expect((driver.status().brain as { transport?: string }).transport).toBe('wss');
     expect((driver.status().brain as { brainId?: string }).brainId).toBe(runtime.identity.id);
     expect(runtime.isBodyConnected(driver.status().bodyId as string)).toBe(true);
@@ -132,7 +135,7 @@ describe('brain ↔ body over WSS (real TLS)', () => {
     driver.disconnect();
     await waitFor(() => !driver.isReady(), 5_000, 'disconnected');
     driver.connect();
-    await waitFor(() => driver.isReady(), 25_000, 'reconnected by identity over WSS');
+    await waitFor(() => driver.isReady(), 40_000, 'reconnected by identity over WSS');
   });
 
   it('FAILS CLOSED when the certificate is signed by an untrusted CA', async () => {

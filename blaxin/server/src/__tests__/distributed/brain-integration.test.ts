@@ -144,12 +144,15 @@ describe('brain ↔ body integration (real sockets)', () => {
     const code = runtime.generatePairingCode()?.code;
 
     driver.connect(code);
-    await waitFor(() => driver.isReady(), 10_000, 'first connect');
+    // 20s: under full-suite parallel load the Ed25519 handshake chain can
+    // legitimately exceed 10s wall-clock (observed once); the wait stays
+    // bounded — a real hang still fails, just slower.
+    await waitFor(() => driver.isReady(), 20_000, 'first connect');
 
     driver.disconnect();
     await waitFor(() => !driver.isReady(), 5_000, 'disconnect');
     driver.connect(); // NO pairing code: identity auth must suffice
-    await waitFor(() => driver.isReady(), 10_000, 'reconnect via identity auth');
+    await waitFor(() => driver.isReady(), 20_000, 'reconnect via identity auth');
     expect(hasEvent(events, 'error', (d) => d.code === 'PAIRING_REQUIRED')).toBe(false);
   });
 

@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useAppStore, ModelInfo } from '../utils/store';
+import { useDialogA11y } from '../hooks/useDialogA11y';
 import { api } from '../services/api';
 import {
   FiCheck, FiX, FiAlertTriangle, FiLoader, FiRefreshCw,
@@ -46,6 +47,12 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
   const { setSettingsOpen } = useAppStore();
 
   const step = STEPS[currentStep];
+
+  // Full dialog semantics for the first-run overlay: focus management,
+  // focus trap and focus restore. Escape intentionally does NOT dismiss
+  // the wizard — first-run setup must be completed or the app stays on it.
+  const wizardRef = useRef<HTMLDivElement>(null);
+  useDialogA11y(wizardRef, { escapeCloses: false });
 
   const nextStep = () => setCurrentStep(Math.min(currentStep + 1, STEPS.length - 1));
   const prevStep = () => setCurrentStep(Math.max(currentStep - 1, 0));
@@ -190,7 +197,7 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
       }}>
         <img src="/blaxin-mark.png" alt="BLAXIN logo" width={56} height={56} draggable={false} />
       </div>
-      <h1 style={{
+      <h1 id="setup-wizard-title" style={{
         fontSize: 32, fontWeight: 800, fontFamily: 'var(--font-mono)',
         letterSpacing: 4, marginBottom: 8,
         background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))',
@@ -658,7 +665,12 @@ export function SetupWizard({ onComplete }: { onComplete: () => void }) {
       backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center',
       justifyContent: 'center', zIndex: 200,
     }}>
-      <div style={{
+      <div
+        ref={wizardRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="setup-wizard-title"
+        style={{
         width: 680, maxWidth: '90vw', maxHeight: '85vh',
         background: 'var(--bg-secondary)', border: '1px solid var(--border-primary)',
         borderRadius: 'var(--radius-xl)', display: 'flex', flexDirection: 'column',

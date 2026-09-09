@@ -31,7 +31,12 @@ export default defineConfig({
     channel: 'chrome',
     headless: true,
     launchOptions: {
-      args: ['--no-sandbox', '--disable-dev-shm-usage'],
+      // Chrome sandbox stays ENABLED by default. BLAXIN's directive forbids
+      // the lazy --no-sandbox fix; this opt-out exists only for sandboxless
+      // container hosts (user namespaces blocked) and is set explicitly.
+      args: process.env.BLAXIN_E2E_NO_SANDBOX
+        ? ['--no-sandbox', '--disable-dev-shm-usage']
+        : ['--disable-dev-shm-usage'],
     },
     trace: 'retain-on-failure',
   },

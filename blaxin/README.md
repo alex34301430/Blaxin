@@ -255,7 +255,7 @@ launcher and desktop entry, as before.
 ## Branding
 
 The official BLAXIN logo (geometric "B" mark) lives at
-`brand/blaxin-logo-source.jpeg`; all application icons (Tauri window/tray,
+`brand/blaxin-logo-source.png`; all application icons (Tauri window/tray,
 AppImage, `.deb`, favicon) and in-app brand marks are generated from it via
 `python3 brand/generate-icons.py`. See [docs/branding.md](docs/branding.md).
 

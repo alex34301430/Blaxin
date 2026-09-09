@@ -1,0 +1,94 @@
+name: E2E (real stack)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'blaxin/server/**'
+      - 'blaxin/client/**'
+      - 'blaxin/e2e/**'
+      - '.github/workflows/e2e.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'blaxin/server/**'
+      - 'blaxin/client/**'
+      - 'blaxin/e2e/**'
+      - '.github/workflows/e2e.yml'
+
+permissions:
+  contents: read
+
+# One e2e run at a time per ref: both webServers bind fixed localhost ports.
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            blaxin/server/package-lock.json
+            blaxin/client/package-lock.json
+            blaxin/e2e/package-lock.json
+
+      # Chrome is preinstalled on ubuntu-22.04 runners — no browser download
+      # and no playwright install step. The suite runs headless with the
+      # Chrome sandbox ENABLED (runners execute as a normal user).
+      - name: Verify Chrome is available
+        run: |
+          google-chrome --version
+          if ! google-chrome --version | grep -q 'Google Chrome'; then
+            echo "Google Chrome not found on runner"
+            exit 1
+          fi
+
+      - name: Install server dependencies
+        working-directory: blaxin/server
+        run: npm ci
+
+      - name: Build server (type check)
+        working-directory: blaxin/server
+        run: npm run build
+
+      - name: Install client dependencies
+        working-directory: blaxin/client
+        run: npm ci
+
+      - name: Build client (type check)
+        working-directory: blaxin/client
+        run: npm run build
+
+      - name: Install e2e dependencies
+        working-directory: blaxin/e2e
+        run: npm ci
+
+      - name: Run real-stack E2E
+        working-directory: blaxin/e2e
+        env:
+          CI: '1'
+          PW_BACKEND_PORT: '3001'
+          PW_VITE_PORT: '5173'
+        run: npm test
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-failures
+          path: |
+            blaxin/e2e/test-results/
+            blaxin/e2e/playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

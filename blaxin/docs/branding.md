@@ -11,7 +11,7 @@ black square) — is stored in the repository so builds never depend on a file
 on any individual machine:
 
 ```
-blaxin/brand/blaxin-logo-source.jpeg
+blaxin/brand/blaxin-logo-source.png
 ```
 
 All derived assets are generated from this single file. The logo design is
@@ -55,7 +55,7 @@ This produces:
 
 ## Updating the brand assets
 
-1. Replace `blaxin/brand/blaxin-logo-source.jpeg` with the new official
+1. Replace `blaxin/brand/blaxin-logo-source.png` with the new official
    asset (same design intent: square, mark on black).
 2. Run `python3 blaxin/brand/generate-icons.py`.
 3. Commit the refreshed source + generated assets together.
