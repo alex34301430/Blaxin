@@ -4,7 +4,7 @@
 - **Date**: 2026-09-09
 - **Branch**: main
 - **Version**: 1.3.0 (all in-repo version sources bumped; release pending)
-- **Mission Status**: **v1.3.0 RELEASE READINESS COMPLETE — all engineering done and verified locally; awaiting final commit → push → tag v1.3.0 (CI builds/signs/publishes).** See the v1.3.0 session block below for full evidence.
+- **Mission Status**: **v1.3.0 RELEASED AND VERIFIED.** Tag pushed → CI built/signed/published `BLAXIN v1.3.0` (release run 34312715204, `success`): AppImage + .deb + sigs + sha256 + latest.json. Release asset + raw-main updater manifest both verified serving version 1.3.0 with canonical tasinxxx/Blaxin URLs. Quick-install chain re-verified against the new release (v1.3.0 .deb bytes downloaded, Debian binary package header confirmed). Double-v notes cosmetic bug found in the CI commit-back and fixed (workflow line + manifest normalized on main and on the release asset). E2E workflow green in CI on every run (56s). Known-future: v1.4.0 CI rerun will exercise the fixed notes line end-to-end.
 
 ## SESSION — v1.3.0 COMPLETION + BRANDING + IDENTITY (2026-09-09)
 
