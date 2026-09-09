@@ -10,6 +10,7 @@
 import os from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { readFileSync } from 'fs';
 import { statfsSync } from 'fs';
 
 const execFileAsync = promisify(execFile);
@@ -118,6 +119,73 @@ async function diskUsage(mount: string): Promise<DiskTelemetry | null> {
     // df unavailable — disk stays null, the UI says so.
   }
   return null;
+}
+
+// ── Network throughput (real /proc/net/dev deltas) ───────────
+
+export interface NetworkInterfaceSample {
+  name: string;
+  rxBytes: number;
+  txBytes: number;
+}
+
+export interface NetworkTelemetry {
+  timestamp: number;
+  /** Bytes per second since the previous call (aggregate, non-loopback). */
+  rxBytesPerSec: number;
+  txBytesPerSec: number;
+  interfaces: NetworkInterfaceSample[];
+  /** Cumulative bytes since boot (non-loopback aggregate). */
+  rxTotalBytes: number;
+  txTotalBytes: number;
+}
+
+function readNetDev(): NetworkInterfaceSample[] {
+  try {
+    const raw = readFileSync('/proc/net/dev', 'utf-8');
+    const out: NetworkInterfaceSample[] = [];
+    for (const line of raw.split('\n').slice(2)) {
+      const m = line.trim().match(/^([^:]+):\s*(\d+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+(\d+)/);
+      if (!m) continue;
+      const name = m[1];
+      if (name === 'lo') continue; // loopback traffic is not "network"
+      out.push({ name, rxBytes: Number(m[2]), txBytes: Number(m[3]) });
+    }
+    return out;
+  } catch {
+    // /proc/net/dev unavailable (non-Linux / sandboxed) — empty, the UI says so.
+    return [];
+  }
+}
+
+let lastNetSample: { at: number; rx: number; tx: number } | null = null;
+
+function networkThroughput(): { rxBytesPerSec: number; txBytesPerSec: number; rxTotal: number; txTotal: number } {
+  const ifaces = readNetDev();
+  const rxTotal = ifaces.reduce((s, i) => s + i.rxBytes, 0);
+  const txTotal = ifaces.reduce((s, i) => s + i.txBytes, 0);
+  const now = Date.now();
+  if (!lastNetSample) {
+    lastNetSample = { at: now, rx: rxTotal, tx: txTotal };
+    return { rxBytesPerSec: 0, txBytesPerSec: 0, rxTotal, txTotal };
+  }
+  const dt = (now - lastNetSample.at) / 1000;
+  const rxRate = dt > 0 ? Math.max(0, (rxTotal - lastNetSample.rx) / dt) : 0;
+  const txRate = dt > 0 ? Math.max(0, (txTotal - lastNetSample.tx) / dt) : 0;
+  lastNetSample = { at: now, rx: rxTotal, tx: txTotal };
+  return { rxBytesPerSec: rxRate, txBytesPerSec: txRate, rxTotal, txTotal };
+}
+
+export function getNetworkTelemetry(): NetworkTelemetry {
+  const { rxBytesPerSec, txBytesPerSec, rxTotal, txTotal } = networkThroughput();
+  return {
+    timestamp: Date.now(),
+    rxBytesPerSec,
+    txBytesPerSec,
+    interfaces: readNetDev(),
+    rxTotalBytes: rxTotal,
+    txTotalBytes: txTotal,
+  };
 }
 
 export async function getSystemTelemetry(): Promise<SystemTelemetry> {

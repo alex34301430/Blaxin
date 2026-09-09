@@ -1,0 +1,1281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BLAXIN // AI_AGENT_OS // v2.4.1</title>
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+<style>
+/* === CSS VARIABLES === */
+:root {
+  --bg-void: #030712;
+  --bg-panel: #060d1a;
+  --bg-panel-hover: #0a1526;
+  --border-primary: #00d4ff;
+  --border-dim: #004d5e;
+  --text-primary: #00d4ff;
+  --text-secondary: #7de8ff;
+  --text-dim: #2a6675;
+  --accent-green: #00ff9f;
+  --accent-amber: #ff9500;
+  --accent-red: #ff3366;
+  --accent-purple: #bf5fff;
+  --glow-cyan: rgba(0,212,255,0.15);
+  --glow-green: rgba(0,255,159,0.12);
+  --scanline: rgba(0,212,255,0.025);
+}
+
+/* === RESET & BASE === */
+*, *::before, *::after { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  font-family: 'Share Tech Mono', 'Courier New', monospace;
+  background: var(--bg-void);
+  background-image:
+    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(0,212,255,0.07) 0%, transparent 70%),
+    radial-gradient(ellipse 40% 30% at 20% 80%, rgba(0,255,159,0.04) 0%, transparent 60%);
+  color: var(--text-secondary);
+  overflow: hidden;
+  width: 100vw;
+  height: 100vh;
+  position: relative;
+  cursor: crosshair;
+}
+
+/* CRT scanline global overlay */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.12) 2px, rgba(0,0,0,0.12) 4px);
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* === BOOT SCREEN === */
+#boot-screen {
+  position: fixed; inset: 0;
+  background: #000;
+  z-index: 10000;
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  gap: 12px;
+}
+
+#boot-title {
+  font-family: 'Orbitron', monospace;
+  font-size: 18px; font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.35em;
+  text-shadow: 0 0 20px var(--border-primary), 0 0 40px rgba(0,212,255,0.4);
+  white-space: nowrap; overflow: hidden;
+  border-right: 2px solid var(--border-primary);
+  animation: typewriter-title 1.2s steps(28) forwards, blink-cursor 0.5s step-end 1.2s 3;
+  width: 0;
+}
+@keyframes typewriter-title { to { width: 26ch; } }
+@keyframes blink-cursor { 50% { border-color: transparent; } }
+
+.boot-line {
+  font-size: 12px; color: var(--text-dim);
+  letter-spacing: 0.1em;
+  opacity: 0;
+  transform: translateX(-10px);
+  transition: all 0.2s ease;
+  font-family: 'Share Tech Mono', monospace;
+}
+.boot-line.visible { opacity: 1; transform: translateX(0); }
+.boot-line .ok { color: var(--accent-green); }
+
+.boot-scanline {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--border-primary), transparent);
+  box-shadow: 0 0 10px var(--border-primary);
+  opacity: 0;
+}
+
+.boot-arc {
+  position: absolute;
+  width: 80px; height: 80px;
+  opacity: 0;
+}
+.boot-arc .ring {
+  position: absolute; inset: 0;
+  border-radius: 50%;
+  border: 1.5px solid transparent;
+}
+.boot-arc .ring1 { border-top-color: var(--border-primary); border-right-color: rgba(0,212,255,0.3); animation: spin 1.5s linear infinite; box-shadow: 0 0 8px var(--border-primary); }
+.boot-arc .ring2 { inset: 12px; border-bottom-color: var(--accent-green); border-left-color: rgba(0,255,159,0.3); animation: spin-r 2s linear infinite; }
+.boot-arc .ring3 { inset: 24px; border-top-color: var(--accent-purple); animation: spin 3s linear infinite; }
+.boot-arc .core { position:absolute; inset:34px; border-radius:50%; background:var(--border-primary); box-shadow:0 0 20px var(--border-primary), 0 0 40px rgba(0,212,255,0.5); }
+@keyframes spin { to { transform:rotate(360deg); } }
+@keyframes spin-r { to { transform:rotate(-360deg); } }
+
+/* === PARTICLE CANVAS === */
+#particle-canvas {
+  position: fixed; inset: 0;
+  pointer-events: none;
+  z-index: 1;
+}
+
+/* === MAIN HUD LAYOUT === */
+#hud {
+  position: relative; z-index: 100;
+  width: 100vw; height: 100vh;
+  display: grid;
+  grid-template-rows: 52px 1fr 28px;
+  grid-template-columns: 1fr;
+  opacity: 0;
+  transition: opacity 0.5s ease;
+}
+#hud.visible { opacity: 1; }
+
+/* === HEADER BAR === */
+#header {
+  grid-row: 1;
+  background: #040b16;
+  border-bottom: 1px solid var(--border-dim);
+  display: flex; align-items: center;
+  padding: 0 16px;
+  gap: 16px;
+  position: relative;
+  overflow: hidden;
+}
+#header::before {
+  content: '';
+  position: absolute; top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border-primary), transparent);
+  opacity: 0.6;
+}
+
+.header-brand {
+  font-family: 'Orbitron', monospace;
+  font-size: 18px; font-weight: 900;
+  color: var(--text-primary);
+  letter-spacing: 0.05em;
+  text-shadow: 0 0 20px var(--border-primary);
+  white-space: nowrap;
+}
+.header-divider { color: var(--border-dim); font-size: 14px; }
+.header-sub { font-family: 'Orbitron', monospace; font-size: 9px; color: var(--text-dim); letter-spacing: 0.25em; white-space: nowrap; }
+
+.header-wave {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center;
+  gap: 3px; height: 32px;
+}
+.wave-bar {
+  width: 3px; background: var(--border-primary);
+  border-radius: 2px; min-height: 4px;
+  opacity: 0.7;
+  animation: wave-anim var(--d, 1s) ease-in-out infinite alternate;
+  box-shadow: 0 0 4px var(--border-primary);
+}
+@keyframes wave-anim { from { height: var(--h1, 4px); } to { height: var(--h2, 20px); } }
+
+.header-right { display: flex; align-items: center; gap: 12px; white-space: nowrap; }
+.status-pill {
+  font-family: 'Orbitron', monospace; font-size: 9px;
+  padding: 3px 10px; border-radius: 20px;
+  border: 1px solid var(--accent-green);
+  color: var(--accent-green);
+  letter-spacing: 0.2em;
+  display: flex; align-items: center; gap: 5px;
+  box-shadow: 0 0 8px var(--glow-green);
+}
+.status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent-green); animation: pulse-dot 2s ease-in-out infinite; }
+@keyframes pulse-dot { 0%,100%{box-shadow:0 0 4px var(--accent-green);} 50%{box-shadow:0 0 10px var(--accent-green),0 0 20px rgba(0,255,159,0.3);} }
+
+.header-stat { font-size: 10px; color: var(--text-dim); }
+.header-stat span { color: var(--text-secondary); }
+#session-timer { color: var(--accent-amber); }
+
+/* === PANELS AREA === */
+#panels-area {
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: 20% 1fr 24%;
+  grid-template-rows: 1fr;
+  gap: 6px;
+  padding: 6px;
+  overflow: hidden;
+}
+
+/* LEFT COLUMN */
+#left-col {
+  display: flex; flex-direction: column; gap: 6px;
+}
+
+/* RIGHT COLUMN */
+#right-col {
+  display: flex; flex-direction: column; gap: 6px;
+}
+
+/* === PANEL BASE === */
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-dim);
+  border-top: 2px solid var(--border-primary);
+  border-radius: 2px;
+  position: relative;
+  overflow: hidden;
+  display: flex; flex-direction: column;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+.panel:hover {
+  border-color: var(--border-primary);
+  box-shadow: 0 0 18px var(--glow-cyan), inset 0 0 30px rgba(0,212,255,0.03);
+}
+.panel::after {
+  content: '';
+  position: absolute; inset: 0;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, var(--scanline) 2px, var(--scanline) 4px);
+  pointer-events: none; z-index: 5;
+}
+
+/* Corner brackets */
+.panel::before {
+  content: '';
+  position: absolute; top: 0; left: 0;
+  width: 8px; height: 8px;
+  border-top: 1px solid var(--border-primary);
+  border-left: 1px solid var(--border-primary);
+  z-index: 10;
+}
+.corner-br {
+  position: absolute; bottom: 0; right: 0;
+  width: 8px; height: 8px;
+  border-bottom: 1px solid var(--border-primary);
+  border-right: 1px solid var(--border-primary);
+  z-index: 10;
+}
+
+/* Panel Title Bar */
+.panel-title {
+  display: flex; align-items: center;
+  padding: 0 10px;
+  height: 24px; min-height: 24px;
+  border-bottom: 1px solid rgba(0,212,255,0.2);
+  background: rgba(0,212,255,0.03);
+  gap: 6px; z-index: 6;
+}
+.panel-icon { color: var(--text-primary); font-size: 10px; animation: icon-pulse 2.5s ease-in-out infinite; }
+@keyframes icon-pulse { 0%,100%{opacity:0.6;} 50%{opacity:1;text-shadow:0 0 8px var(--border-primary);} }
+.panel-name {
+  font-family: 'Orbitron', monospace;
+  font-size: 8px; font-weight: 700;
+  color: var(--text-primary); letter-spacing: 0.25em;
+  flex: 1;
+}
+.panel-status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--accent-green); animation: pulse-dot 2.5s ease-in-out infinite; }
+.panel-status-dot.amber { background: var(--accent-amber); animation: pulse-dot-amber 1.5s ease-in-out infinite; }
+@keyframes pulse-dot-amber { 0%,100%{box-shadow:0 0 4px var(--accent-amber);} 50%{box-shadow:0 0 10px var(--accent-amber);} }
+.panel-controls { display: flex; gap: 6px; }
+.panel-ctrl { font-size: 9px; color: var(--text-dim); cursor: pointer; transition: color 0.2s; }
+.panel-ctrl:hover { color: var(--text-primary); }
+
+/* Panel body */
+.panel-body { flex: 1; padding: 8px 10px; overflow: hidden; position: relative; z-index: 6; }
+
+/* === PANEL 2: NEURAL STATUS === */
+#neural-panel { flex: 0 0 37%; }
+
+.bar-row { margin-bottom: 7px; }
+.bar-label { font-size: 9px; color: var(--text-dim); letter-spacing: 0.1em; margin-bottom: 3px; display: flex; justify-content: space-between; }
+.bar-label span { color: var(--text-secondary); }
+.bar-track {
+  height: 5px; border-radius: 1px;
+  background: rgba(0,212,255,0.08);
+  border: 1px solid rgba(0,212,255,0.15);
+  position: relative;
+}
+.bar-fill {
+  height: 100%; border-radius: 1px;
+  background: linear-gradient(90deg, rgba(0,212,255,0.4), var(--border-primary));
+  box-shadow: 0 0 6px var(--border-primary);
+  transition: width 1.5s cubic-bezier(0.4,0,0.2,1);
+  position: relative;
+}
+.bar-fill::after {
+  content: '';
+  position: absolute; right: 0; top: -1px; bottom: -1px;
+  width: 3px;
+  background: white;
+  box-shadow: 0 0 6px var(--border-primary);
+  border-radius: 1px;
+}
+
+.neural-state {
+  margin-top: 8px;
+  text-align: center;
+}
+.state-text {
+  font-family: 'Orbitron', monospace;
+  font-size: 13px; font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.2em;
+  animation: state-glow 3s ease-in-out infinite;
+}
+@keyframes state-glow { 0%,100%{text-shadow:0 0 8px var(--border-primary);} 50%{text-shadow:0 0 20px var(--border-primary),0 0 40px rgba(0,212,255,0.3);} }
+
+.arc-container {
+  width: 60px; height: 60px;
+  margin: 6px auto;
+  position: relative;
+}
+.arc-ring {
+  position: absolute; inset: 0;
+  border-radius: 50%; border: 1.5px solid transparent;
+}
+.arc-r1 { border-top-color: var(--border-primary); border-right-color: rgba(0,212,255,0.2); animation: spin 2.5s linear infinite; }
+.arc-r2 { inset: 10px; border-bottom-color: var(--accent-purple); animation: spin-r 3.5s linear infinite; }
+.arc-r3 { inset: 20px; border-top-color: var(--accent-green); border-left-color: rgba(0,255,159,0.2); animation: spin 5s linear infinite; }
+.arc-core { position:absolute; inset:26px; border-radius:50%; background:rgba(0,212,255,0.5); box-shadow:0 0 10px var(--border-primary); animation: core-pulse 2s ease-in-out infinite; }
+@keyframes core-pulse { 0%,100%{opacity:0.6;} 50%{opacity:1;box-shadow:0 0 20px var(--border-primary);} }
+
+.neural-metrics { font-size: 9px; color: var(--text-dim); text-align: center; letter-spacing: 0.05em; margin-top: 4px; }
+
+/* === PANEL 3: MEMORY BANK === */
+#memory-panel { flex: 1; }
+
+.mem-bar-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.mem-bar-label { font-size: 9px; color: var(--text-dim); width: 70px; flex-shrink: 0; }
+.mem-bar-track { flex: 1; height: 4px; background: rgba(0,212,255,0.08); border-radius: 1px; }
+.mem-bar-fill { height: 100%; border-radius: 1px; background: linear-gradient(90deg, rgba(0,212,255,0.3), var(--border-primary)); box-shadow: 0 0 4px var(--border-primary); transition: width 1.5s ease; }
+.mem-bar-val { font-size: 9px; color: var(--text-secondary); width: 30px; text-align: right; }
+
+.mem-divider { border: none; border-top: 1px solid rgba(0,212,255,0.1); margin: 6px 0; }
+.mem-entries { display: flex; flex-direction: column; gap: 3px; }
+.mem-entry {
+  font-size: 9px; color: var(--text-dim);
+  padding: 2px 4px; border-radius: 1px;
+  border-left: 1px solid rgba(0,212,255,0.2);
+  transition: all 0.3s ease;
+}
+.mem-entry.new { background: rgba(0,255,159,0.08); border-left-color: var(--accent-green); color: var(--text-secondary); }
+
+/* === PANEL 4: TASK QUEUE === */
+#task-panel { flex: 0 0 28%; }
+
+.task-table { width: 100%; border-collapse: collapse; font-size: 9px; }
+.task-table th { color: var(--text-dim); padding: 2px 0; letter-spacing: 0.1em; border-bottom: 1px solid rgba(0,212,255,0.15); font-weight: normal; }
+.task-table td { padding: 3px 0; vertical-align: middle; }
+.task-id { color: var(--text-dim); }
+.task-name { color: var(--text-secondary); max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-status { font-size: 8px; white-space: nowrap; }
+.status-running { color: var(--accent-amber); animation: blink-status 1s ease-in-out infinite; }
+.status-done { color: var(--accent-green); }
+.status-queue { color: var(--text-dim); }
+@keyframes blink-status { 0%,100%{opacity:1;} 50%{opacity:0.5;} }
+.task-time { color: var(--text-dim); font-size: 9px; text-align: right; }
+.task-row-active { background: rgba(255,149,0,0.05); }
+
+/* === CENTER PANEL === */
+#center-panel { display: flex; flex-direction: column; }
+
+.terminal-tabs {
+  display: flex; gap: 1px;
+  padding: 0 8px;
+  border-bottom: 1px solid rgba(0,212,255,0.15);
+  background: rgba(0,0,0,0.3);
+}
+.t-tab {
+  font-family: 'Orbitron', monospace; font-size: 8px;
+  padding: 5px 10px; color: var(--text-dim); cursor: pointer;
+  border-bottom: 2px solid transparent;
+  letter-spacing: 0.15em; transition: all 0.2s;
+}
+.t-tab.active { color: var(--text-primary); border-bottom-color: var(--border-primary); }
+.t-tab:hover { color: var(--text-secondary); }
+
+.terminal-body {
+  flex: 1; padding: 10px 12px;
+  font-size: 11px; line-height: 1.7;
+  overflow-y: auto; overflow-x: hidden;
+  background: #020810;
+  position: relative;
+}
+.terminal-body::-webkit-scrollbar { width: 3px; }
+.terminal-body::-webkit-scrollbar-track { background: transparent; }
+.terminal-body::-webkit-scrollbar-thumb { background: var(--border-dim); border-radius: 2px; }
+
+.t-line { opacity: 0; transform: translateY(3px); animation: line-appear 0.2s ease forwards; display: block; word-break: break-word; }
+@keyframes line-appear { to { opacity: 1; transform: translateY(0); } }
+.t-prompt { color: var(--border-primary); text-shadow: 0 0 6px var(--border-primary); }
+.t-cmd { color: #e0f0ff; }
+.t-info { color: var(--text-dim); }
+.t-ok { color: var(--accent-green); }
+.t-warn { color: var(--accent-amber); }
+.t-err { color: var(--accent-red); }
+.t-data { color: var(--text-secondary); }
+.t-cursor { display: inline-block; width: 8px; height: 12px; background: var(--border-primary); animation: blink-cursor-block 0.5s step-end infinite; vertical-align: text-bottom; }
+@keyframes blink-cursor-block { 50% { opacity: 0; } }
+
+.terminal-info-strip {
+  display: flex; gap: 16px; padding: 4px 12px;
+  border-top: 1px solid rgba(0,212,255,0.1);
+  background: rgba(0,0,0,0.4); font-size: 9px; color: var(--text-dim);
+}
+.terminal-info-strip span { color: var(--text-secondary); }
+
+/* === PANEL 6: NETWORK HUB === */
+#network-panel { flex: 0 0 58%; }
+
+.net-graph { width: 100%; height: 70px; margin-bottom: 6px; }
+.net-stats { display: flex; gap: 12px; margin-bottom: 8px; }
+.net-stat { font-size: 9px; color: var(--text-dim); }
+.net-stat span { color: var(--text-secondary); }
+.net-stat .rx { color: var(--border-primary); }
+.net-stat .tx { color: var(--accent-green); }
+
+.conn-list { display: flex; flex-direction: column; gap: 3px; }
+.conn-row { display: flex; align-items: center; gap: 5px; font-size: 9px; }
+.conn-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--accent-green); animation: pulse-dot 2s ease-in-out infinite; }
+.conn-host { color: var(--text-secondary); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-proto { color: var(--text-dim); font-size: 8px; }
+.conn-flow { width: 30px; height: 2px; background: rgba(0,212,255,0.1); border-radius: 1px; position: relative; overflow: hidden; }
+.conn-flow::after { content:''; position:absolute; left:-10px; top:0; bottom:0; width:10px; background: linear-gradient(90deg, transparent, var(--border-primary)); animation: flow-anim 1.5s linear infinite; }
+@keyframes flow-anim { to { left: 100%; } }
+
+/* === PANEL 7: SECURITY VAULT === */
+#security-panel { flex: 1; }
+
+.sec-row { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.sec-label { font-size: 9px; color: var(--text-dim); width: 65px; flex-shrink: 0; }
+.sec-bar-track { flex: 1; height: 4px; background: rgba(0,255,159,0.08); border-radius: 1px; overflow: hidden; }
+.sec-bar-fill { height: 100%; background: linear-gradient(90deg, rgba(0,255,159,0.3), var(--accent-green)); box-shadow: 0 0 4px var(--accent-green); animation: auth-fill 15s linear infinite; }
+@keyframes auth-fill { 0%{width:0} 95%{width:100%} 100%{width:100%} }
+.sec-val { font-size: 9px; color: var(--accent-green); white-space: nowrap; }
+
+.sec-divider { border: none; border-top: 1px solid rgba(0,212,255,0.1); margin: 6px 0; }
+.sec-log { display: flex; flex-direction: column; gap: 2px; }
+.sec-log-entry { font-size: 9px; color: var(--text-dim); border-left: 1px solid rgba(0,212,255,0.15); padding-left: 4px; }
+.sec-log-entry .sec-time { color: var(--text-dim); margin-right: 4px; }
+.sec-log-entry .sec-msg { color: var(--text-secondary); }
+
+/* === BOTTOM RAIL === */
+#bottom-rail {
+  grid-row: 3;
+  background: rgba(4,11,22,0.95);
+  border-top: 1px solid var(--border-dim);
+  display: flex; align-items: center;
+  gap: 10px; overflow: hidden;
+  padding: 0 12px;
+}
+.rail-label {
+  font-family: 'Orbitron', monospace; font-size: 8px;
+  color: var(--text-primary); letter-spacing: 0.2em;
+  white-space: nowrap; flex-shrink: 0;
+}
+.rail-ticker-wrap { flex: 1; overflow: hidden; position: relative; }
+.rail-ticker {
+  display: inline-block; white-space: nowrap;
+  font-size: 9px; color: var(--text-dim);
+  animation: ticker-scroll 60s linear infinite;
+}
+@keyframes ticker-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+
+/* === GLOBAL CORNER BRACKETS ON VIEWPORT === */
+.viewport-corner {
+  position: fixed; z-index: 200; width: 20px; height: 20px;
+  pointer-events: none;
+}
+.vc-tl { top: 8px; left: 8px; border-top: 1px solid var(--border-primary); border-left: 1px solid var(--border-primary); }
+.vc-tr { top: 8px; right: 8px; border-top: 1px solid var(--border-primary); border-right: 1px solid var(--border-primary); }
+.vc-bl { bottom: 8px; left: 8px; border-bottom: 1px solid var(--border-primary); border-left: 1px solid var(--border-primary); }
+.vc-br { bottom: 8px; right: 8px; border-bottom: 1px solid var(--border-primary); border-right: 1px solid var(--border-primary); }
+
+/* === GLITCH EFFECT === */
+.glitch-active {
+  animation: glitch-anim 0.2s steps(2) !important;
+}
+@keyframes glitch-anim {
+  0% { text-shadow: -2px 0 #ff3366, 2px 0 #00d4ff, 0 0 20px var(--border-primary); }
+  33% { text-shadow: 2px 0 #ff3366, -2px 0 #00d4ff, 0 0 20px var(--border-primary); }
+  66% { text-shadow: -1px 0 #bf5fff, 1px 0 #00ff9f, 0 0 20px var(--border-primary); }
+  100% { text-shadow: 0 0 20px var(--border-primary); }
+}
+
+/* === TOAST NOTIFICATION === */
+.toast {
+  position: fixed; bottom: 40px; right: 20px;
+  background: var(--bg-panel); border: 1px solid var(--accent-amber);
+  border-left: 3px solid var(--accent-amber);
+  padding: 8px 14px; font-size: 10px; color: var(--accent-amber);
+  z-index: 9000; animation: toast-in 0.3s ease;
+  box-shadow: 0 0 15px rgba(255,149,0,0.2);
+}
+@keyframes toast-in { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+/* Reduced motion */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}
+</style>
+</head>
+<body>
+
+<!-- Viewport corner brackets -->
+<div class="viewport-corner vc-tl"></div>
+<div class="viewport-corner vc-tr"></div>
+<div class="viewport-corner vc-bl"></div>
+<div class="viewport-corner vc-br"></div>
+
+<!-- Particle background canvas -->
+<canvas id="particle-canvas"></canvas>
+
+<!-- Boot Screen -->
+<div id="boot-screen">
+  <div class="boot-scanline" id="boot-scanline"></div>
+  <div id="boot-title">INITIALIZING BLAXIN CORE...</div>
+  <div id="boot-lines" style="margin-top:20px;display:flex;flex-direction:column;gap:4px;width:320px;">
+    <div class="boot-line" data-delay="1300">&gt; NEURAL_ENGINE ............. <span class="ok">[OK]</span></div>
+    <div class="boot-line" data-delay="1500">&gt; MEMORY_PROTOCOL ........... <span class="ok">[OK]</span></div>
+    <div class="boot-line" data-delay="1700">&gt; TASK_SCHEDULER ............ <span class="ok">[OK]</span></div>
+    <div class="boot-line" data-delay="1900">&gt; NETWORK_BRIDGE ............ <span class="ok">[OK]</span></div>
+    <div class="boot-line" data-delay="2100">&gt; SECURITY_LAYER ............ <span class="ok">[OK]</span></div>
+    <div class="boot-line" data-delay="2300">&gt; AGENT_CORE ................ <span class="ok">[ONLINE]</span></div>
+  </div>
+  <div class="boot-arc" id="boot-arc" style="margin-top:20px;">
+    <div class="ring ring1"></div>
+    <div class="ring ring2"></div>
+    <div class="ring ring3"></div>
+    <div class="ring" style="inset:34px;border-radius:50%;background:var(--border-primary);box-shadow:0 0 20px var(--border-primary);animation:core-pulse 2s ease-in-out infinite;"></div>
+  </div>
+  <div style="font-family:'Orbitron',monospace;font-size:9px;color:var(--accent-green);letter-spacing:0.3em;margin-top:8px;opacity:0;" id="boot-ready">BLAXIN ONLINE</div>
+</div>
+
+<!-- MAIN HUD -->
+<div id="hud">
+
+  <!-- HEADER -->
+  <header id="header">
+    <div class="header-brand" id="brand-title">BLAXIN</div>
+    <div class="header-divider">//</div>
+    <div class="header-sub">AI_AGENT_OS // v2.4.1</div>
+    <div class="header-wave" id="header-wave"></div>
+    <div class="header-right">
+      <div class="status-pill"><div class="status-dot"></div> ONLINE</div>
+      <div class="header-stat">NEURAL: <span id="neural-pct">94%</span></div>
+      <div class="header-stat">SESSION: <span id="session-timer">00:00:00</span></div>
+      <div class="header-stat">ID: <span>BLX-7741</span></div>
+      <div style="font-size:8px;color:var(--text-dim);font-family:'Orbitron',monospace;">© BLAXIN 2026</div>
+    </div>
+  </header>
+
+  <!-- PANELS AREA -->
+  <div id="panels-area">
+
+    <!-- LEFT COLUMN -->
+    <div id="left-col">
+
+      <!-- PANEL 2: NEURAL STATUS -->
+      <div class="panel" id="neural-panel">
+        <div class="panel-title">
+          <span class="panel-icon">◈</span>
+          <span class="panel-name">NEURAL_STATUS</span>
+          <div class="panel-status-dot"></div>
+          <div class="panel-controls"><span class="panel-ctrl">─</span><span class="panel-ctrl">×</span></div>
+        </div>
+        <div class="panel-body">
+          <div class="bar-row">
+            <div class="bar-label">NEURAL NET <span id="nn-val">84%</span></div>
+            <div class="bar-track"><div class="bar-fill" id="nn-bar" style="width:84%"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">LEARNING <span id="lr-val">67%</span></div>
+            <div class="bar-track"><div class="bar-fill" id="lr-bar" style="width:67%;background:linear-gradient(90deg,rgba(191,95,255,0.4),var(--accent-purple));box-shadow:0 0 6px var(--accent-purple);"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-label">INFERENCE <span id="inf-val">99%</span></div>
+            <div class="bar-track"><div class="bar-fill" id="inf-bar" style="width:99%;background:linear-gradient(90deg,rgba(0,255,159,0.4),var(--accent-green));box-shadow:0 0 6px var(--accent-green);"></div></div>
+          </div>
+          <div class="neural-state">
+            <div class="arc-container">
+              <div class="arc-ring arc-r1"></div>
+              <div class="arc-ring arc-r2"></div>
+              <div class="arc-ring arc-r3"></div>
+              <div class="arc-core"></div>
+            </div>
+            <div class="state-text" id="agent-state">ANALYZING</div>
+            <div class="neural-metrics" id="neural-metrics">TEMP: 2.1° | TOKENS: 4,892 | CTX: 87%</div>
+          </div>
+        </div>
+        <div class="corner-br"></div>
+      </div>
+
+      <!-- PANEL 3: MEMORY BANK -->
+      <div class="panel" id="memory-panel">
+        <div class="panel-title">
+          <span class="panel-icon">◈</span>
+          <span class="panel-name">MEMORY_BANK</span>
+          <div class="panel-status-dot"></div>
+          <div class="panel-controls"><span class="panel-ctrl">─</span><span class="panel-ctrl">×</span></div>
+        </div>
+        <div class="panel-body">
+          <div class="mem-bar-row">
+            <div class="mem-bar-label">CONTEXT</div>
+            <div class="mem-bar-track"><div class="mem-bar-fill" id="ctx-bar" style="width:68%"></div></div>
+            <div class="mem-bar-val" id="ctx-val">8.1k</div>
+          </div>
+          <div class="mem-bar-row">
+            <div class="mem-bar-label">LONG TERM</div>
+            <div class="mem-bar-track"><div class="mem-bar-fill" id="ltm-bar" style="width:41%;background:linear-gradient(90deg,rgba(191,95,255,0.3),var(--accent-purple));box-shadow:0 0 4px var(--accent-purple);"></div></div>
+            <div class="mem-bar-val" id="ltm-val">247</div>
+          </div>
+          <div class="mem-bar-row">
+            <div class="mem-bar-label">SESSION</div>
+            <div class="mem-bar-track"><div class="mem-bar-fill" id="sess-bar" style="width:55%;background:linear-gradient(90deg,rgba(0,255,159,0.3),var(--accent-green));box-shadow:0 0 4px var(--accent-green);"></div></div>
+            <div class="mem-bar-val" id="sess-val">5.2M</div>
+          </div>
+          <hr class="mem-divider">
+          <div style="font-size:8px;color:var(--text-dim);letter-spacing:0.15em;margin-bottom:4px;">RECENT MEMORIES:</div>
+          <div class="mem-entries" id="mem-entries">
+            <div class="mem-entry">&gt; User lang: technical English</div>
+            <div class="mem-entry">&gt; Task: Jarvis-style UI for Blaxin</div>
+            <div class="mem-entry">&gt; Learned: "Orbitron + Share Tech Mono"</div>
+            <div class="mem-entry">&gt; Last action: HTML generation (now)</div>
+          </div>
+        </div>
+        <div class="corner-br"></div>
+      </div>
+
+      <!-- PANEL 4: TASK QUEUE -->
+      <div class="panel" id="task-panel">
+        <div class="panel-title">
+          <span class="panel-icon">◈</span>
+          <span class="panel-name">TASK_QUEUE</span>
+          <div class="panel-status-dot amber"></div>
+          <div class="panel-controls"><span class="panel-ctrl">─</span><span class="panel-ctrl">×</span></div>
+        </div>
+        <div class="panel-body" style="padding:6px 8px;">
+          <table class="task-table">
+            <thead><tr>
+              <th style="text-align:left">ID</th>
+              <th style="text-align:left">TASK</th>
+              <th style="text-align:left">STATUS</th>
+              <th style="text-align:right">T</th>
+            </tr></thead>
+            <tbody id="task-tbody">
+              <tr class="task-row-active"><td class="task-id">#1041</td><td class="task-name">Code Gen</td><td class="task-status"><span class="status-running">▶ RUN</span></td><td class="task-time" id="t1041">2:41</td></tr>
+              <tr><td class="task-id">#1042</td><td class="task-name">Mem Index</td><td class="task-status"><span class="status-done">◉ DONE</span></td><td class="task-time">0:08</td></tr>
+              <tr><td class="task-id">#1043</td><td class="task-name">Web Search</td><td class="task-status"><span class="status-running">▶ RUN</span></td><td class="task-time" id="t1043">0:32</td></tr>
+              <tr><td class="task-id">#1044</td><td class="task-name">File Anly.</td><td class="task-status"><span class="status-queue">⏳ WAIT</span></td><td class="task-time">—</td></tr>
+              <tr><td class="task-id">#1045</td><td class="task-name">Report Gen</td><td class="task-status"><span class="status-queue">⏳ WAIT</span></td><td class="task-time">—</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="corner-br"></div>
+      </div>
+
+    </div><!-- end left col -->
+
+    <!-- CENTER PANEL: AGENT TERMINAL -->
+    <div class="panel" id="center-panel">
+      <div class="panel-title">
+        <span class="panel-icon">◈</span>
+        <span class="panel-name">AGENT_TERMINAL</span>
+        <div style="width:6px;height:6px;border-radius:50%;background:var(--accent-amber);animation:pulse-dot-amber 1s ease-in-out infinite;"></div>
+        <div class="panel-controls"><span class="panel-ctrl">─</span><span class="panel-ctrl">×</span></div>
+      </div>
+      <div class="terminal-tabs">
+        <div class="t-tab active" onclick="switchTab(this,'agent-core')">AGENT_CORE</div>
+        <div class="t-tab" onclick="switchTab(this,'tool-calls')">TOOL_CALLS</div>
+        <div class="t-tab" onclick="switchTab(this,'reasoning')">REASONING</div>
+        <div class="t-tab" onclick="switchTab(this,'output')">OUTPUT</div>
+        <div class="t-tab" onclick="switchTab(this,'logs')">LOGS</div>
+      </div>
+      <div class="terminal-body" id="terminal-body">
+        <span class="t-line"><span class="t-prompt">usr@blaxin:~$ </span><span class="t-cmd">blaxin --start-agent --mode=interactive</span></span>
+        <span class="t-line"><span class="t-info">&gt; Loading BLAXIN AI OS v2.4.1...</span></span>
+        <span class="t-line"><span class="t-ok">&gt; Agent core initialized [OK]</span></span>
+        <span class="t-line"><span class="t-info">&gt; Connecting to neural bridge...</span></span>
+      </div>
+      <div class="terminal-info-strip">
+        <div>UPTIME: <span id="uptime-display">00:00:00</span></div>
+        <div>ACTIONS: <span id="action-count">0</span></div>
+        <div>TOKENS: <span id="token-count">0</span></div>
+        <div>QUEUE: <span id="queue-count">2</span> tasks</div>
+      </div>
+      <div class="corner-br"></div>
+    </div>
+
+    <!-- RIGHT COLUMN -->
+    <div id="right-col">
+
+      <!-- PANEL 6: NETWORK HUB -->
+      <div class="panel" id="network-panel">
+        <div class="panel-title">
+          <span class="panel-icon">◈</span>
+          <span class="panel-name">NETWORK_HUB</span>
+          <div class="panel-status-dot"></div>
+          <div class="panel-controls"><span class="panel-ctrl">─</span><span class="panel-ctrl">×</span></div>
+        </div>
+        <div class="panel-body">
+          <svg class="net-graph" id="net-svg" viewBox="0 0 200 70" preserveAspectRatio="none">
+            <defs>
+              <linearGradient id="rxGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#00d4ff" stop-opacity="0.3"/>
+                <stop offset="100%" stop-color="#00d4ff" stop-opacity="0"/>
+              </linearGradient>
+              <linearGradient id="txGrad" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="#00ff9f" stop-opacity="0.3"/>
+                <stop offset="100%" stop-color="#00ff9f" stop-opacity="0"/>
+              </linearGradient>
+            </defs>
+            <line x1="0" y1="17" x2="200" y2="17" stroke="rgba(0,212,255,0.1)" stroke-width="0.5"/>
+            <line x1="0" y1="35" x2="200" y2="35" stroke="rgba(0,212,255,0.1)" stroke-width="0.5"/>
+            <line x1="0" y1="52" x2="200" y2="52" stroke="rgba(0,212,255,0.1)" stroke-width="0.5"/>
+            <polyline id="rx-area" fill="url(#rxGrad)" stroke="none"/>
+            <polyline id="rx-line" fill="none" stroke="#00d4ff" stroke-width="1.2" style="filter:drop-shadow(0 0 3px #00d4ff)"/>
+            <polyline id="tx-area" fill="url(#txGrad)" stroke="none"/>
+            <polyline id="tx-line" fill="none" stroke="#00ff9f" stroke-width="1" style="filter:drop-shadow(0 0 3px #00ff9f)"/>
+          </svg>
+          <div class="net-stats">
+            <div class="net-stat">RX: <span class="rx" id="rx-stat">3.2 Gbps</span></div>
+            <div class="net-stat">TX: <span class="tx" id="tx-stat">1.8 Gbps</span></div>
+            <div class="net-stat">PING: <span id="ping-stat">24ms</span></div>
+          </div>
+          <hr class="mem-divider">
+          <div style="font-size:8px;color:var(--text-dim);letter-spacing:0.15em;margin-bottom:4px;">CONNECTIONS <span style="color:var(--accent-green);">[5 ACTIVE]</span></div>
+          <div class="conn-list">
+            <div class="conn-row"><div class="conn-dot"></div><div class="conn-host">api.anthropic.com</div><div class="conn-proto">TLS 1.3</div><div class="conn-flow"></div></div>
+            <div class="conn-row"><div class="conn-dot"></div><div class="conn-host">api.openai.com</div><div class="conn-proto">TLS 1.3</div><div class="conn-flow"></div></div>
+            <div class="conn-row"><div class="conn-dot"></div><div class="conn-host">search.engine.io</div><div class="conn-proto">HTTP/2</div><div class="conn-flow"></div></div>
+            <div class="conn-row"><div class="conn-dot"></div><div class="conn-host">storage.blaxin.io</div><div class="conn-proto">TLS 1.3</div><div class="conn-flow"></div></div>
+            <div class="conn-row"><div class="conn-dot" style="background:var(--accent-amber);animation:pulse-dot-amber 1.5s ease-in-out infinite;"></div><div class="conn-host">telemetry.local</div><div class="conn-proto">WS</div><div class="conn-flow"></div></div>
+          </div>
+        </div>
+        <div class="corner-br"></div>
+      </div>
+
+      <!-- PANEL 7: SECURITY VAULT -->
+      <div class="panel" id="security-panel">
+        <div class="panel-title">
+          <span class="panel-icon">◈</span>
+          <span class="panel-name">SECURITY_VAULT</span>
+          <div class="panel-status-dot"></div>
+          <div class="panel-controls"><span class="panel-ctrl">─</span><span class="panel-ctrl">×</span></div>
+        </div>
+        <div class="panel-body">
+          <div class="sec-row">
+            <div class="sec-label">AUTH STATUS</div>
+            <div class="sec-bar-track"><div class="sec-bar-fill"></div></div>
+            <div class="sec-val">VERIFIED</div>
+          </div>
+          <div class="sec-row">
+            <div class="sec-label">ENCRYPTION</div>
+            <div style="flex:1;font-size:9px;color:var(--text-secondary);">AES-256-GCM</div>
+            <div class="sec-val">ACTIVE</div>
+          </div>
+          <div class="sec-row">
+            <div class="sec-label">SESSION</div>
+            <div style="flex:1;font-size:8px;color:var(--text-dim);">BLX-7741-9F2E</div>
+            <div class="sec-val" style="font-size:8px;">VALID</div>
+          </div>
+          <hr class="sec-divider">
+          <div style="font-size:8px;color:var(--text-dim);letter-spacing:0.15em;margin-bottom:4px;">SECURITY LOG</div>
+          <div class="sec-log" id="sec-log">
+            <div class="sec-log-entry"><span class="sec-time">[04:12:11]</span><span class="sec-msg">Auth token refreshed</span></div>
+            <div class="sec-log-entry"><span class="sec-time">[04:11:47]</span><span class="sec-msg">Rate limit: 0 violations</span></div>
+            <div class="sec-log-entry"><span class="sec-time">[04:09:33]</span><span class="sec-msg">SSL cert verified</span></div>
+            <div class="sec-log-entry"><span class="sec-time">[04:00:00]</span><span class="sec-msg">BLAXIN initialized</span></div>
+          </div>
+        </div>
+        <div class="corner-br"></div>
+      </div>
+
+    </div><!-- end right col -->
+  </div><!-- end panels-area -->
+
+  <!-- BOTTOM RAIL -->
+  <div id="bottom-rail">
+    <div class="rail-label">◈ ACTIVITY</div>
+    <div class="rail-ticker-wrap">
+      <div class="rail-ticker" id="rail-ticker"></div>
+    </div>
+  </div>
+
+</div><!-- end hud -->
+
+<script>
+// ========== AUDIO ENGINE ==========
+let audioCtx = null;
+let audioReady = false;
+
+function initAudio() {
+  if (audioReady) return;
+  try {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    audioReady = true;
+  } catch(e) {}
+}
+
+function playSound(type) {
+  if (!audioReady || !audioCtx) return;
+  try {
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain); gain.connect(audioCtx.destination);
+    const t = audioCtx.currentTime;
+    if (type === 'boot') {
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(440, t);
+      osc.frequency.linearRampToValueAtTime(880, t+0.2);
+      gain.gain.setValueAtTime(0.1, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t+0.5);
+      osc.start(); osc.stop(t+0.5);
+    } else if (type === 'panel') {
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(80, t);
+      osc.frequency.linearRampToValueAtTime(400, t+0.3);
+      gain.gain.setValueAtTime(0.05, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t+0.4);
+      osc.start(); osc.stop(t+0.4);
+    } else if (type === 'type') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(2000, t);
+      gain.gain.setValueAtTime(0.015, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t+0.04);
+      osc.start(); osc.stop(t+0.04);
+    } else if (type === 'task') {
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(660, t);
+      osc.frequency.linearRampToValueAtTime(440, t+0.08);
+      gain.gain.setValueAtTime(0.06, t);
+      gain.gain.exponentialRampToValueAtTime(0.001, t+0.15);
+      osc.start(); osc.stop(t+0.15);
+    }
+  } catch(e) {}
+}
+
+document.addEventListener('click', () => { initAudio(); }, { once: true });
+
+// ========== PARTICLE SYSTEM ==========
+const canvas = document.getElementById('particle-canvas');
+const ctx2d = canvas.getContext('2d');
+let particles = [];
+
+function resizeCanvas() {
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+
+function initParticles() {
+  particles = [];
+  for (let i = 0; i < 55; i++) {
+    particles.push({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      vx: (Math.random()-0.5)*0.4,
+      vy: (Math.random()-0.5)*0.4,
+      size: Math.random()*1.5+0.5,
+      opacity: Math.random()*0.15+0.05
+    });
+  }
+}
+
+let mouseX = -999, mouseY = -999;
+document.addEventListener('mousemove', e => { mouseX=e.clientX; mouseY=e.clientY; });
+
+function animParticles() {
+  ctx2d.clearRect(0,0,canvas.width,canvas.height);
+  for (let p of particles) {
+    const dx = p.x - mouseX, dy = p.y - mouseY;
+    const dist = Math.sqrt(dx*dx+dy*dy);
+    if (dist < 100) { p.vx += dx/dist*0.03; p.vy += dy/dist*0.03; }
+    p.vx = Math.max(-0.8, Math.min(0.8, p.vx));
+    p.vy = Math.max(-0.8, Math.min(0.8, p.vy));
+    p.x += p.vx; p.y += p.vy;
+    if (p.x<0) p.x=canvas.width; if (p.x>canvas.width) p.x=0;
+    if (p.y<0) p.y=canvas.height; if (p.y>canvas.height) p.y=0;
+    for (let q of particles) {
+      const d = Math.sqrt((p.x-q.x)**2+(p.y-q.y)**2);
+      if (d<120) {
+        ctx2d.beginPath();
+        ctx2d.strokeStyle = `rgba(0,212,255,${0.06*(1-d/120)})`;
+        ctx2d.lineWidth = 0.5;
+        ctx2d.moveTo(p.x,p.y); ctx2d.lineTo(q.x,q.y);
+        ctx2d.stroke();
+      }
+    }
+    ctx2d.beginPath();
+    ctx2d.arc(p.x,p.y,p.size,0,Math.PI*2);
+    ctx2d.fillStyle = `rgba(0,212,255,${p.opacity})`;
+    ctx2d.fill();
+  }
+  requestAnimationFrame(animParticles);
+}
+
+resizeCanvas(); initParticles(); animParticles();
+window.addEventListener('resize', () => { resizeCanvas(); initParticles(); });
+
+// ========== BOOT SEQUENCE ==========
+function runBoot() {
+  const bootLines = document.querySelectorAll('.boot-line');
+  const bootScanline = document.getElementById('boot-scanline');
+  const bootArc = document.getElementById('boot-arc');
+  const bootReady = document.getElementById('boot-ready');
+
+  // Scanline sweep
+  setTimeout(() => {
+    bootScanline.style.transition = 'top 0.7s linear, opacity 0.2s';
+    bootScanline.style.opacity = '1';
+    bootScanline.style.top = '100vh';
+  }, 1000);
+
+  // Boot lines appear
+  bootLines.forEach(line => {
+    const delay = parseInt(line.dataset.delay);
+    setTimeout(() => {
+      line.classList.add('visible');
+      playSound('type');
+    }, delay);
+  });
+
+  // Arc reactor
+  setTimeout(() => {
+    bootArc.style.transition = 'opacity 0.4s';
+    bootArc.style.opacity = '1';
+  }, 2400);
+
+  // BLAXIN ONLINE text
+  setTimeout(() => {
+    bootReady.style.transition = 'opacity 0.3s';
+    bootReady.style.opacity = '1';
+    playSound('boot');
+  }, 2700);
+
+  // Transition to HUD
+  setTimeout(() => {
+    const bootScreen = document.getElementById('boot-screen');
+    bootScreen.style.transition = 'opacity 0.6s ease, transform 0.6s ease';
+    bootScreen.style.opacity = '0';
+    bootScreen.style.transform = 'scale(1.05)';
+    setTimeout(() => {
+      bootScreen.style.display = 'none';
+      const hud = document.getElementById('hud');
+      hud.classList.add('visible');
+      playSound('panel');
+      startHUD();
+    }, 600);
+  }, 3200);
+}
+
+// ========== HEADER WAVE ==========
+function buildHeaderWave() {
+  const wave = document.getElementById('header-wave');
+  for (let i = 0; i < 14; i++) {
+    const bar = document.createElement('div');
+    bar.className = 'wave-bar';
+    const h1 = Math.floor(Math.random()*6+4)+'px';
+    const h2 = Math.floor(Math.random()*22+8)+'px';
+    const dur = (0.7+Math.random()*0.8).toFixed(2)+'s';
+    bar.style.cssText = `--h1:${h1};--h2:${h2};--d:${dur};height:${h1};animation-delay:${(i*0.1).toFixed(1)}s`;
+    wave.appendChild(bar);
+  }
+}
+
+// ========== SESSION TIMER ==========
+let sessionSeconds = 0;
+let uptimeSeconds = 0;
+let actionCount = 0;
+let tokenCount = 0;
+
+function formatTime(s) {
+  return [Math.floor(s/3600), Math.floor((s%3600)/60), s%60]
+    .map(n => String(n).padStart(2,'0')).join(':');
+}
+
+function updateTimers() {
+  sessionSeconds++;
+  uptimeSeconds++;
+  document.getElementById('session-timer').textContent = formatTime(sessionSeconds);
+  document.getElementById('uptime-display').textContent = formatTime(uptimeSeconds);
+}
+
+// ========== TERMINAL ENGINE ==========
+const terminalLines = [
+  {type:'info', text:'> Loading agent configuration...'},
+  {type:'ok', text:'> Memory bank online [8,192 tokens loaded]'},
+  {type:'prompt+cmd', prompt:'usr@blaxin:~$ ', cmd:'agent.execute("analyze_context")'},
+  {type:'info', text:'> Parsing user intent... '},
+  {type:'data', text:'  → Intent: UI design & development'},
+  {type:'data', text:'  → Confidence: 0.97 | Tools: [code_gen, web_search]'},
+  {type:'prompt+cmd', prompt:'usr@blaxin:~$ ', cmd:'tool.run("web_search", query="Jarvis UI patterns 2026")'},
+  {type:'info', text:'> Executing web_search...'},
+  {type:'data', text:'  → 14 results | Top relevance: 0.94'},
+  {type:'ok', text:'> Search complete [OK]'},
+  {type:'prompt+cmd', prompt:'usr@blaxin:~$ ', cmd:'agent.generate("response_draft")'},
+  {type:'info', text:'> Synthesizing response...'},
+  {type:'data', text:'  → Model: claude-sonnet | Temp: 2.1'},
+  {type:'data', text:'  → [████████████████████] 100%'},
+  {type:'ok', text:'> Draft ready. Quality: 9.4/10'},
+  {type:'prompt+cmd', prompt:'usr@blaxin:~$ ', cmd:'blaxin.stream_to_user()'},
+  {type:'info', text:'> Streaming output to interface...'},
+  {type:'ok', text:'> DONE. Actions logged: ' + Math.floor(Math.random()*50+800)},
+  {type:'prompt+cmd', prompt:'usr@blaxin:~$ ', cmd:'queue.next()'},
+  {type:'info', text:'> Fetching next task from queue...'},
+  {type:'data', text:'  → Task #1044: File Analysis | Priority: HIGH'},
+  {type:'warn', text:'  → Warning: Large file detected (2.3 GB)'},
+  {type:'info', text:'> Allocating memory buffer...'},
+  {type:'ok', text:'> Buffer allocated [OK]'},
+  {type:'prompt+cmd', prompt:'usr@blaxin:~$ ', cmd:'agent.analyze_file("/data/blaxin_core.db")'},
+  {type:'info', text:'> Reading file structure...'},
+  {type:'data', text:'  → 4,891 records | 23 tables | Encrypted: YES'},
+  {type:'ok', text:'> Analysis complete. Report queued.'},
+];
+
+let termLineIndex = 4;
+let typeCharCount = 0;
+const termBody = document.getElementById('terminal-body');
+
+function appendTermLine(lineData) {
+  const span = document.createElement('span');
+  span.className = 't-line';
+
+  if (lineData.type === 'prompt+cmd') {
+    const p = document.createElement('span'); p.className='t-prompt'; p.textContent=lineData.prompt;
+    const c = document.createElement('span'); c.className='t-cmd'; c.textContent=lineData.cmd;
+    span.appendChild(p); span.appendChild(c);
+  } else {
+    const cls = {info:'t-info',ok:'t-ok',warn:'t-warn',err:'t-err',data:'t-data'}[lineData.type]||'t-info';
+    span.innerHTML = `<span class="${cls}">${lineData.text}</span>`;
+  }
+
+  // Remove cursor from previous last element if exists
+  const prevCursor = termBody.querySelector('.t-cursor');
+  if (prevCursor) prevCursor.remove();
+
+  termBody.appendChild(span);
+
+  // Add cursor to last line
+  const cursor = document.createElement('span');
+  cursor.className = 't-cursor';
+  span.appendChild(cursor);
+
+  termBody.scrollTop = termBody.scrollHeight;
+
+  actionCount++;
+  tokenCount += Math.floor(Math.random()*150+50);
+  document.getElementById('action-count').textContent = actionCount;
+  document.getElementById('token-count').textContent = tokenCount.toLocaleString();
+
+  if ((lineData.type==='prompt+cmd') || lineData.type==='ok') playSound('type');
+}
+
+function scheduleNextLine() {
+  const delay = (1800 + Math.random()*3000);
+  setTimeout(() => {
+    if (termLineIndex < terminalLines.length) {
+      appendTermLine(terminalLines[termLineIndex++]);
+    } else {
+      termLineIndex = 4; // loop
+    }
+    scheduleNextLine();
+  }, delay);
+}
+
+// ========== DATA SIMULATOR ==========
+const agentStates = ['ANALYZING','PROCESSING','REASONING','RESPONDING','IDLE','COMPUTING'];
+let stateIdx = 0;
+
+function fluctuate(val, min, max, delta) {
+  return Math.min(max, Math.max(min, val + (Math.random()-0.5)*delta*2));
+}
+
+let nnVal=84, lrVal=67, infVal=99, ctxVal=68, ltmVal=41, sessVal=55;
+
+function updateData() {
+  // Neural bars
+  nnVal = fluctuate(nnVal, 70, 98, 4);
+  lrVal = fluctuate(lrVal, 50, 90, 6);
+  infVal = fluctuate(infVal, 88, 100, 3);
+
+  document.getElementById('nn-val').textContent = Math.round(nnVal)+'%';
+  document.getElementById('lr-val').textContent = Math.round(lrVal)+'%';
+  document.getElementById('inf-val').textContent = Math.round(infVal)+'%';
+  document.getElementById('nn-bar').style.width = nnVal+'%';
+  document.getElementById('lr-bar').style.width = lrVal+'%';
+  document.getElementById('inf-bar').style.width = infVal+'%';
+  document.getElementById('neural-pct').textContent = Math.round(nnVal)+'%';
+
+  // Memory bars
+  ctxVal = fluctuate(ctxVal, 40, 95, 5);
+  document.getElementById('ctx-val').textContent = (ctxVal*0.12).toFixed(1)+'k';
+  document.getElementById('ctx-bar').style.width = ctxVal+'%';
+
+  // Network stats
+  const rxV = (Math.random()*4+1).toFixed(1);
+  const txV = (Math.random()*2+0.5).toFixed(1);
+  const ping = Math.floor(Math.random()*30+10);
+  document.getElementById('rx-stat').textContent = rxV+' Gbps';
+  document.getElementById('tx-stat').textContent = txV+' Gbps';
+  document.getElementById('ping-stat').textContent = ping+'ms';
+}
+
+// Agent state cycling
+function cycleState() {
+  stateIdx = (stateIdx+1) % agentStates.length;
+  const stateEl = document.getElementById('agent-state');
+  stateEl.style.opacity='0';
+  setTimeout(() => {
+    stateEl.textContent = agentStates[stateIdx];
+    stateEl.style.opacity='1';
+    stateEl.style.transition = 'opacity 0.5s ease';
+  }, 300);
+}
+
+// ========== NETWORK GRAPH ==========
+let rxData = Array(30).fill(0).map(()=>Math.random()*50+20);
+let txData = Array(30).fill(0).map(()=>Math.random()*30+10);
+
+function updateGraph() {
+  rxData.push(Math.random()*60+15); rxData.shift();
+  txData.push(Math.random()*35+8); txData.shift();
+
+  const svg = document.getElementById('net-svg');
+  const W=200, H=70, max=80;
+  const toP = (arr,y0) => arr.map((v,i)=>`${(i/(arr.length-1))*W},${H-(v/max*H)}`).join(' ');
+  const toArea = (arr) => {
+    const pts = arr.map((v,i)=>`${(i/(arr.length-1))*W},${H-(v/max*H)}`);
+    return `0,${H} ${pts.join(' ')} ${W},${H}`;
+  };
+
+  document.getElementById('rx-line').setAttribute('points', toP(rxData));
+  document.getElementById('rx-area').setAttribute('points', toArea(rxData));
+  document.getElementById('tx-line').setAttribute('points', toP(txData));
+  document.getElementById('tx-area').setAttribute('points', toArea(txData));
+}
+
+// ========== TASK TIMERS ==========
+let t1041s=161, t1043s=32;
+function updateTaskTimers() {
+  t1041s++; t1043s++;
+  const fmt = s => `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+  const el1 = document.getElementById('t1041'); if(el1) el1.textContent=fmt(t1041s);
+  const el2 = document.getElementById('t1043'); if(el2) el2.textContent=fmt(t1043s);
+}
+
+// ========== MEMORY ENTRIES ==========
+const memFacts = [
+  '> User: prefers monospace fonts', '> Pref: dark background UIs',
+  '> Task: Blaxin Jarvis UI design', '> Tool: Web Audio API synthesized',
+  '> Learned: 7-panel layout spec', '> Ctx: CORE_OS image analyzed',
+  '> Recent: Prompt file generated', '> Agent: HTML build complete'
+];
+let memIdx = 0;
+function rotateMem() {
+  const entries = document.getElementById('mem-entries');
+  const newEntry = document.createElement('div');
+  newEntry.className = 'mem-entry new';
+  newEntry.textContent = memFacts[memIdx % memFacts.length];
+  memIdx++;
+  entries.insertBefore(newEntry, entries.firstChild);
+  if (entries.children.length > 5) entries.removeChild(entries.lastChild);
+  setTimeout(() => newEntry.classList.remove('new'), 800);
+}
+
+// ========== SECURITY LOG ==========
+const secEvents = [
+  'Token refreshed', 'SSL handshake OK', 'Auth verified',
+  'Rate limit: clean', 'Session extended', 'Cert valid 89d'
+];
+let secIdx=0;
+function appendSecLog() {
+  const log = document.getElementById('sec-log');
+  const now = new Date();
+  const time = `[${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}]`;
+  const entry = document.createElement('div');
+  entry.className = 'sec-log-entry';
+  entry.innerHTML = `<span class="sec-time">${time}</span><span class="sec-msg">${secEvents[secIdx%secEvents.length]}</span>`;
+  secIdx++;
+  log.insertBefore(entry, log.firstChild);
+  if (log.children.length>5) log.removeChild(log.lastChild);
+}
+
+// ========== GLITCH ENGINE ==========
+function triggerGlitch() {
+  const el = document.getElementById('brand-title');
+  el.classList.add('glitch-active');
+  setTimeout(()=>el.classList.remove('glitch-active'), 220);
+}
+
+// ========== TICKER ==========
+const tickerMsgs = [
+  '> Agent completed task #1042: Memory indexing ... ',
+  '> Processing user request: Jarvis UI design ... ',
+  '> Web search initiated: "futuristic HUD patterns 2026" ... ',
+  '> 5 tools available: code_gen, web_search, file_reader, memory, calc ... ',
+  '> Memory updated with 3 new entries ... ',
+  '> Neural net load: 84% | Temperature nominal ... ',
+  '> Security scan: 0 threats detected ... ',
+  '> Token usage: 42,891 | Session uptime: growing ... ',
+  '> Next task: File Analysis #1044 queued ... ',
+  '> BLAXIN AI OS v2.4.1 — All systems operational ... '
+];
+
+function buildTicker() {
+  const ticker = document.getElementById('rail-ticker');
+  const full = tickerMsgs.join('  ◈  ');
+  ticker.textContent = full + '  ◈  ' + full;
+}
+
+// ========== TAB SWITCHER ==========
+function switchTab(el, name) {
+  document.querySelectorAll('.t-tab').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+  playSound('type');
+}
+
+// ========== PANEL CONTROLS ==========
+document.addEventListener('click', e => {
+  if (e.target.classList.contains('panel-ctrl')) {
+    const panel = e.target.closest('.panel');
+    if (e.target.textContent === '─') {
+      const body = panel.querySelector('.panel-body');
+      const extra = panel.querySelector('.terminal-tabs,.terminal-body,.terminal-info-strip,.net-graph,.net-stats,.conn-list,.mem-bar-row,.mem-entries,.mem-divider,.sec-row,.sec-log,.sec-divider,.task-table');
+      if (body) {
+        body.style.display = body.style.display==='none' ? '' : 'none';
+      }
+    } else if (e.target.textContent === '×') {
+      panel.style.transition='opacity 0.3s';
+      panel.style.opacity='0.2';
+      setTimeout(()=>panel.style.opacity='0.2',300);
+    }
+  }
+});
+
+// ========== START HUD ==========
+function startHUD() {
+  buildHeaderWave();
+  buildTicker();
+
+  // Main intervals
+  setInterval(updateTimers, 1000);
+  setInterval(updateData, 2500);
+  setInterval(updateGraph, 2000);
+  setInterval(cycleState, 6000);
+  setInterval(updateTaskTimers, 1000);
+  setInterval(rotateMem, 9000);
+  setInterval(appendSecLog, 18000);
+  setInterval(triggerGlitch, 11000 + Math.random()*5000);
+
+  // Start terminal
+  scheduleNextLine();
+
+  // Initial updates
+  updateGraph();
+  updateData();
+}
+
+// ========== INIT ==========
+document.addEventListener('DOMContentLoaded', () => {
+  runBoot();
+});
+</script>
+</body>
+</html>

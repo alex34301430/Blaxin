@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getSystemTelemetry } from '../utils/system-telemetry.js';
+import { getSystemTelemetry, getNetworkTelemetry } from '../utils/system-telemetry.js';
 
 describe('system telemetry', () => {
   it('returns real, bounded values (never invented)', async () => {
@@ -48,5 +48,21 @@ describe('system telemetry', () => {
     expect(b.cpu.usagePercent).toBeGreaterThanOrEqual(0);
     expect(a.cpu.usagePercent).toBeLessThanOrEqual(100);
     expect(b.cpu.usagePercent).toBeLessThanOrEqual(100);
+  });
+
+  it('returns real, bounded network throughput readings', async () => {
+    // Seed the delta baseline, then read a real rate.
+    getNetworkTelemetry();
+    const n = getNetworkTelemetry();
+    expect(n.timestamp).toBeGreaterThan(0);
+    expect(n.rxBytesPerSec).toBeGreaterThanOrEqual(0);
+    expect(n.txBytesPerSec).toBeGreaterThanOrEqual(0);
+    expect(n.rxTotalBytes).toBeGreaterThanOrEqual(0);
+    expect(n.txTotalBytes).toBeGreaterThanOrEqual(0);
+    // Interface list is either real or honestly empty.
+    for (const iface of n.interfaces) {
+      expect(iface.name.length).toBeGreaterThan(0);
+      expect(iface.rxBytes).toBeGreaterThanOrEqual(0);
+    }
   });
 });

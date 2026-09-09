@@ -86,6 +86,44 @@ function cleanTrailing(value: string): string {
   return value.replace(/[.,;:!?]+$/, '').trim();
 }
 
+// Well-known site names that map straight to a URL. "open youtube"
+// must be a deterministic browser action, not an app-launch guess.
+const SITE_ALIASES: Record<string, string> = {
+  youtube: 'https://youtube.com',
+  yt: 'https://youtube.com',
+  google: 'https://google.com',
+  gmail: 'https://mail.google.com',
+  maps: 'https://maps.google.com',
+  drive: 'https://drive.google.com',
+  docs: 'https://docs.google.com',
+  sheets: 'https://sheets.google.com',
+  github: 'https://github.com',
+  gitlab: 'https://gitlab.com',
+  x: 'https://x.com',
+  twitter: 'https://x.com',
+  facebook: 'https://facebook.com',
+  instagram: 'https://instagram.com',
+  reddit: 'https://reddit.com',
+  wikipedia: 'https://wikipedia.org',
+  stackoverflow: 'https://stackoverflow.com',
+  netflix: 'https://netflix.com',
+  spotify: 'https://open.spotify.com',
+  amazon: 'https://amazon.com',
+  ebay: 'https://ebay.com',
+  chatgpt: 'https://chatgpt.com',
+  claude: 'https://claude.ai',
+  bing: 'https://bing.com',
+  duckduckgo: 'https://duckduckgo.com',
+  weather: 'https://weather.com',
+  news: 'https://news.google.com',
+};
+
+/** Resolve a known site name (case-insensitive) to its URL, or null. */
+export function siteAliasUrl(name: string): string | null {
+  const key = name.trim().toLowerCase();
+  return SITE_ALIASES[key] ?? null;
+}
+
 function isProbablyUrl(value: string): boolean {
   if (/^https?:\/\//i.test(value)) return true;
   // Bare domain: single token with a dot and a plausible TLD tail.
@@ -186,6 +224,18 @@ export function classifyDirect(rawMessage: string): DirectAction | null {
         args: { action: 'open_url', url: /^https?:\/\//i.test(target) ? target : `https://${target}` },
         summary: `Opening ${target}…`,
       };
+    }
+    // Known site name ("open youtube", "open gmail") → browser URL.
+    if (target) {
+      const alias = siteAliasUrl(target);
+      if (alias) {
+        openedTarget = target;
+        return {
+          tool: 'browser',
+          args: { action: 'open_url', url: alias },
+          summary: `Opening ${target}…`,
+        };
+      }
     }
   }
 

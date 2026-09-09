@@ -23,7 +23,7 @@ import {
 import { isVersionNewer, isMajorVersionUpgrade } from './utils/semver.js';
 import { isValidUserMessage, normalizeUserMessage } from './utils/validation.js';
 import { APP_VERSION, GITHUB_REPO, GITHUB_RELEASES_URL } from './utils/version.js';
-import { getSystemTelemetry } from './utils/system-telemetry.js';
+import { getSystemTelemetry, getNetworkTelemetry } from './utils/system-telemetry.js';
 import { dataPath } from './utils/paths.js';
 import { loadOrCreateIdentity } from './distributed/identity.js';
 import { RemoteBrainDriver } from './distributed/remote-brain.js';
@@ -33,6 +33,11 @@ import { OciCloudProvider } from './cloud/oci/client.js';
 import { resolveOciPlatformImageId } from './cloud/oci/client.js';
 import { DeploymentEngine } from './cloud/deployment.js';
 import { createInfrastructureRouter } from './api/infrastructure.js';
+import { TaskQueue } from './utils/task-queue.js';
+import { MissionStore } from './utils/missions.js';
+import { securityLog } from './utils/security-log.js';
+import { JarvisScheduler } from './utils/scheduler.js';
+import { classifyCommand, commandHelpText } from './router/commands.js';
 import { ProviderId, AppConfig } from './types.js';
 
 // ── External Brain mode ─────────────────────────────────────────
@@ -49,6 +54,107 @@ const BRAIN_MODE: 'embedded' | 'external' =
 const BRAIN_URL = process.env.BLAXIN_BRAIN_URL || '';
 
 let remoteBrain: RemoteBrainDriver | null = null;
+
+// ── Jarvis task queue + missions (embedded mode) ───────────────
+// Persistent user-level task queue and mission store. The scheduler
+// is the single path that feeds work to the orchestrator, so queue
+// tasks run one at a time and missions advance on verified completion.
+const queue = new TaskQueue();
+const missions = new MissionStore();
+const scheduler = new JarvisScheduler({
+  queue,
+  missions,
+  orchestrator,
+  emit: broadcast,
+});
+
+/** The device's persistent public identity (BLX-BODY-…). */
+function deviceIdentity() {
+  return loadOrCreateIdentity({
+    filePath: dataPath('body-identity.json'),
+    role: 'body',
+    name: process.env.BLAXIN_BODY_NAME || 'Blaxin Body',
+  });
+}
+
+/** Reply to a deterministic /command with a real agent-message event. */
+function handleCommand(cmd: { command: string; args: Record<string, unknown> }, ws: WebSocket): void {
+  const reply = (content: string) => {
+    ws.send(JSON.stringify({
+      event: 'agent-message',
+      data: {
+        id: `cmd_${Date.now().toString(36)}`,
+        role: 'assistant',
+        content,
+        timestamp: Date.now(),
+      },
+    }));
+  };
+
+  switch (cmd.command) {
+    case 'help':
+      return reply(commandHelpText());
+    case 'version':
+      return reply(`BLAXIN ${APP_VERSION} — Jarvis build`);
+    case 'stop':
+      if (!isExternalMode()) scheduler.stop();
+      return reply('Stopping the current task...');
+    case 'clear':
+      if (!isExternalMode()) scheduler.clearHistory();
+      return reply('Conversation cleared. Memory and missions are kept.');
+    case 'status': {
+      const activeProvider = providers.getActiveProvider();
+      const activeModel = providers.getActiveModel();
+      const queued = queue.list().filter((t) => t.status === 'queued').length;
+      const activeMissions = missions.list().filter((m) => m.status === 'running' || m.status === 'queued').length;
+      const lines = [
+        `AGENT STATE: ${orchestrator.getState().toUpperCase()}`,
+        `MODEL: ${activeProvider && activeModel ? `${activeProvider} / ${activeModel}` : 'none configured'}`,
+        `QUEUE: ${queued} queued task(s)`,
+        `MISSIONS: ${activeMissions} active`,
+        `MODE: ${BRAIN_MODE}`,
+        `DEVICE: ${deviceIdentity().id}`,
+      ];
+      return reply(lines.join('\n'));
+    }
+    case 'memory': {
+      const query = typeof cmd.args.query === 'string' && cmd.args.query ? cmd.args.query : undefined;
+      const entries = memoryStore.search(query);
+      if (entries.length === 0) return reply('Memory is empty.');
+      const lines = entries.slice(-8).map((e) => `- [${e.type}] ${e.content}`);
+      return reply(`MEMORY (${entries.length} matching):\n${lines.join('\n')}`);
+    }
+    case 'queue': {
+      const tasks = queue.list();
+      if (tasks.length === 0) return reply('The task queue is empty.');
+      const lines = tasks.slice(-10).map((t) => `- #${t.id} [${t.status}] (p${t.priority}) ${t.objective.slice(0, 60)}`);
+      return reply(`TASK QUEUE (${tasks.length}):\n${lines.join('\n')}`);
+    }
+    case 'missions': {
+      const all = missions.list();
+      if (all.length === 0) return reply('No missions yet. Create one with /mission-new <objective> | <step1> | <step2>.');
+      const lines = all.slice(-8).map((m) => {
+        const done = m.steps.filter((s) => s.status === 'completed').length;
+        return `- ${m.id} [${m.status}] ${Math.round(m.progress * 100)}% (${done}/${m.steps.length}) ${m.objective.slice(0, 60)}`;
+      });
+      return reply(`MISSIONS (${all.length}):\n${lines.join('\n')}`);
+    }
+    case 'mission-new': {
+      try {
+        const mission = missions.create({
+          objective: typeof cmd.args.objective === 'string' ? cmd.args.objective : '',
+          steps: Array.isArray(cmd.args.steps) ? (cmd.args.steps as string[]) : undefined,
+        });
+        scheduler.pump();
+        return reply(`Mission created: ${mission.id}\nObjective: ${mission.objective}\nSteps: ${mission.steps.length}\nProgress starts at checkpoint 0 and each completed step is checkpointed.`);
+      } catch (error: any) {
+        return reply(`Could not create mission: ${error.message}`);
+      }
+    }
+    default:
+      return reply(`Unknown command. ${commandHelpText()}`);
+  }
+}
 
 /** PEM bundle of the CA that signed the Brain's TLS certificate
  * (BLAXIN_BRAIN_CA_FILE). Remote WSS Brains with a private/self-signed
@@ -166,6 +272,7 @@ app.use('/api', (req, res, next) => {
     return next();
   }
   logger.warn('security', `Blocked ${req.method} ${req.path} from origin ${origin || '(none)'}`);
+  securityLog.record('origin', `Blocked ${req.method} ${req.path} from origin ${origin || '(none)'}`);
   res.status(403).json({ error: 'Origin not allowed' });
 });
 
@@ -270,6 +377,16 @@ app.get('/api/system/telemetry', async (_req, res) => {
   }
 });
 
+// Live network throughput (real /proc/net/dev deltas)
+app.get('/api/system/network', (_req, res) => {
+  try {
+    res.json(getNetworkTelemetry());
+  } catch (error: any) {
+    logger.error('telemetry', `Failed to read network telemetry: ${error.message}`);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Diagnostics
 app.get('/api/diagnostics', async (_req, res) => {
   try {
@@ -304,6 +421,9 @@ app.post('/api/providers/:id/save-key', async (req, res) => {
     const result = await providers.saveKey(id as ProviderId, apiKey, {
       skipValidation: skipValidation === true,
     });
+    if (result.valid !== false) {
+      securityLog.record('credentials', `API key saved for ${id}`);
+    }
     res.json(result);
   } catch (error: any) {
     res.json({ valid: false, error: error.message, code: 'UNKNOWN' });
@@ -313,6 +433,7 @@ app.post('/api/providers/:id/save-key', async (req, res) => {
 app.delete('/api/providers/:id/key', (req, res) => {
   const { id } = req.params;
   providers.removeKey(id as ProviderId);
+  securityLog.record('credentials', `API key removed for ${id}`);
   res.json({ success: true });
 });
 
@@ -483,6 +604,123 @@ app.post('/api/brain/unpair', (_req, res) => {
   res.json({ success: true });
 });
 
+// ── Jarvis: task queue endpoints ─────────────────────────────
+app.get('/api/queue', (_req, res) => {
+  res.json({ tasks: queue.list() });
+});
+
+app.post('/api/queue', (req, res) => {
+  const { objective, priority } = req.body || {};
+  if (typeof objective !== 'string' || !objective.trim()) {
+    return res.status(400).json({ error: 'objective is required', code: 'EMPTY_MESSAGE' });
+  }
+  const task = queue.enqueue({
+    objective: objective.trim(),
+    priority: typeof priority === 'number' ? priority : undefined,
+  });
+  scheduler.pump();
+  res.json({ success: true, task });
+});
+
+app.post('/api/queue/:id/cancel', (req, res) => {
+  const ok = queue.cancel(req.params.id);
+  res.json({ success: ok });
+});
+
+app.post('/api/queue/:id/pause', (req, res) => {
+  const ok = queue.pause(req.params.id);
+  res.json({ success: ok });
+});
+
+app.post('/api/queue/:id/resume', (req, res) => {
+  const ok = queue.resume(req.params.id);
+  if (ok) scheduler.pump();
+  res.json({ success: ok });
+});
+
+app.delete('/api/queue/:id', (req, res) => {
+  res.json({ success: queue.remove(req.params.id) });
+});
+
+// ── Jarvis: mission endpoints ─────────────────────────────────
+app.get('/api/missions', (_req, res) => {
+  res.json({ missions: missions.list() });
+});
+
+app.get('/api/missions/:id', (req, res) => {
+  const mission = missions.get(req.params.id);
+  if (!mission) return res.status(404).json({ error: 'Mission not found', code: 'NOT_FOUND' });
+  res.json({ mission });
+});
+
+app.post('/api/missions', (req, res) => {
+  const { objective, description, steps, priority } = req.body || {};
+  if (typeof objective !== 'string' || !objective.trim()) {
+    return res.status(400).json({ error: 'objective is required', code: 'EMPTY_MESSAGE' });
+  }
+  const mission = missions.create({
+    objective: objective.trim(),
+    description: typeof description === 'string' ? description : undefined,
+    steps: Array.isArray(steps) ? (steps as string[]) : undefined,
+    priority: typeof priority === 'number' ? priority : undefined,
+  });
+  scheduler.pump();
+  res.json({ success: true, mission });
+});
+
+app.post('/api/missions/:id/pause', (req, res) => {
+  res.json({ success: missions.pause(req.params.id) });
+});
+
+app.post('/api/missions/:id/resume', (req, res) => {
+  const ok = missions.resume(req.params.id);
+  if (ok) scheduler.pump();
+  res.json({ success: ok });
+});
+
+app.post('/api/missions/:id/cancel', (req, res) => {
+  res.json({ success: missions.cancel(req.params.id) });
+});
+
+app.post('/api/missions/:id/retry', (req, res) => {
+  const ok = missions.retry(req.params.id);
+  if (ok) scheduler.pump();
+  res.json({ success: ok });
+});
+
+app.delete('/api/missions/:id', (req, res) => {
+  res.json({ success: missions.remove(req.params.id) });
+});
+
+// ── Jarvis: security + status ─────────────────────────────────
+app.get('/api/security/events', (req, res) => {
+  const limit = parseInt(String(req.query.limit || '50'), 10);
+  res.json({ events: securityLog.list(Number.isFinite(limit) ? limit : 50) });
+});
+
+app.get('/api/status', (_req, res) => {
+  const providerStatus = providers.getStatus();
+  const keysConfigured = providerStatus.filter((p: any) => p.hasKey).length;
+  res.json({
+    version: APP_VERSION,
+    mode: BRAIN_MODE,
+    deviceId: deviceIdentity().id,
+    uptime: process.uptime(),
+    state: orchestrator.getState(),
+    activeProvider: providers.getActiveProvider(),
+    activeModel: providers.getActiveModel(),
+    providers: providerStatus.map((p: any) => ({ id: p.id, hasKey: p.hasKey })),
+    security: {
+      encryption: 'AES-256-CBC',
+      keysConfigured,
+      originPolicy: 'local-origins-only',
+    },
+    queue: { count: queue.list().length },
+    missions: { count: missions.list().length },
+    tools: { count: toolRegistry.getAllTools().length },
+  });
+});
+
 // Memory endpoints
 app.get('/api/memory', (req, res) => {
   const query = (req.query.q as string) || undefined;
@@ -571,6 +809,7 @@ function handleUpgrade(
   const origin = (request.headers.origin as string | undefined) || undefined;
   if (!isOriginAllowed(origin, EXTRA_ALLOWED_ORIGINS)) {
     logger.warn('security', `Blocked ${label} WebSocket upgrade from origin ${origin || '(none)'}`);
+    securityLog.record('transport', `Blocked ${label} WebSocket upgrade from origin ${origin || '(none)'}`);
     socket.write('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');
     socket.destroy();
     return;
@@ -609,7 +848,12 @@ function broadcast(event: string, data: unknown): void {
   });
 }
 
-orchestrator.setEventCallback((event, data) => broadcast(event, data));
+orchestrator.setEventCallback((event, data) => {
+  broadcast(event, data);
+  if (!isExternalMode()) scheduler.onOrchestratorEvent(event, data);
+});
+
+securityLog.onChange((events) => broadcast('security-events', { events }));
 
 wss.on('connection', (ws) => {
   logger.info('websocket', 'Client connected');
@@ -631,10 +875,81 @@ wss.on('connection', (ws) => {
           if (isExternalMode()) {
             getRemoteBrain()?.sendUserMessage(normalizeUserMessage(content));
           } else {
-            await orchestrator.processMessage(normalizeUserMessage(content));
+            // Commands run deterministically (no LLM); everything else is
+            // scheduled through the persistent queue.
+            const text = normalizeUserMessage(content);
+            const cmd = classifyCommand(text);
+            if (cmd) {
+              handleCommand(cmd, ws);
+            } else {
+              scheduler.enqueueUserMessage(text);
+            }
           }
           break;
         }
+        case 'command': {
+          // Explicit command message — the client routes slash-commands
+          // here with the raw text (e.g. "/mission-new fix | test").
+          const cmd = classifyCommand(typeof msg.data?.text === 'string' ? msg.data.text : '');
+          if (cmd) handleCommand(cmd, ws);
+          break;
+        }
+        case 'queue-enqueue': {
+          const text = typeof msg.data?.objective === 'string' ? msg.data.objective.trim() : '';
+          if (!text) {
+            ws.send(JSON.stringify({ event: 'error', data: { message: 'Queue objective is required.', code: 'EMPTY_MESSAGE' } }));
+            break;
+          }
+          const task = queue.enqueue({
+            objective: text,
+            priority: typeof msg.data?.priority === 'number' ? msg.data.priority : undefined,
+          });
+          scheduler.pump();
+          ws.send(JSON.stringify({ event: 'queue-task', data: { task } }));
+          break;
+        }
+        case 'queue-cancel':
+          queue.cancel(msg.data?.id);
+          break;
+        case 'queue-pause':
+          queue.pause(msg.data?.id);
+          break;
+        case 'queue-resume':
+          queue.resume(msg.data?.id);
+          scheduler.pump();
+          break;
+        case 'mission-create': {
+          try {
+            const mission = missions.create({
+              objective: typeof msg.data?.objective === 'string' ? msg.data.objective : '',
+              description: typeof msg.data?.description === 'string' ? msg.data.description : undefined,
+              steps: Array.isArray(msg.data?.steps) ? (msg.data.steps as string[]) : undefined,
+              priority: typeof msg.data?.priority === 'number' ? msg.data.priority : undefined,
+            });
+            ws.send(JSON.stringify({ event: 'mission-created', data: { mission } }));
+            scheduler.pump();
+          } catch (error: any) {
+            ws.send(JSON.stringify({ event: 'error', data: { message: error.message, code: 'BAD_MISSION' } }));
+          }
+          break;
+        }
+        case 'mission-pause':
+          missions.pause(msg.data?.id);
+          break;
+        case 'mission-resume':
+          missions.resume(msg.data?.id);
+          scheduler.pump();
+          break;
+        case 'mission-cancel':
+          missions.cancel(msg.data?.id);
+          break;
+        case 'mission-retry':
+          missions.retry(msg.data?.id);
+          scheduler.pump();
+          break;
+        case 'mission-delete':
+          missions.remove(msg.data?.id);
+          break;
         case 'stop':
           if (isExternalMode()) {
             getRemoteBrain()?.stopTask();
@@ -691,7 +1006,13 @@ wss.on('connection', (ws) => {
     activeModel: providers.getActiveModel(),
     description: orchestrator.getCurrentDescription(),
     mode: BRAIN_MODE,
+    deviceId: deviceIdentity().id,
   };
+  // Send the authoritative queue/mission/security snapshots on connect so
+  // the HUD panels render real state immediately (no polling race).
+  ws.send(JSON.stringify({ event: 'queue-updated', data: { tasks: queue.list() } }));
+  ws.send(JSON.stringify({ event: 'mission-progress', data: { missions: missions.list() } }));
+  ws.send(JSON.stringify({ event: 'security-events', data: { events: securityLog.list(50) } }));
   if (isExternalMode() && brain) {
     connectedPayload.bodyId = brain.status().bodyId;
     connectedPayload.brain = brain.status().brain ?? null;

@@ -51,6 +51,17 @@ describe('fast-path router: direct actions', () => {
     expect(classifyDirect('open firefox')).toMatchObject({ tool: 'computer-control', args: { action: 'launch_app', app: 'firefox' } });
   });
 
+  it('resolves known site names to browser URLs deterministically', () => {
+    expect(classifyDirect('open youtube')).toMatchObject({ tool: 'browser', args: { action: 'open_url', url: 'https://youtube.com' } });
+    expect(classifyDirect('open gmail')).toMatchObject({ tool: 'browser', args: { url: 'https://mail.google.com' } });
+    expect(classifyDirect('open GitHub')).toMatchObject({ tool: 'browser', args: { url: 'https://github.com' } });
+    expect(classifyDirect('open wikipedia')).toMatchObject({ tool: 'browser', args: { url: 'https://wikipedia.org' } });
+    // explicit URLs still win over aliases
+    expect(classifyDirect('open youtube.com')).toMatchObject({ tool: 'browser', args: { url: 'https://youtube.com' } });
+    // unknown single-word targets stay app launches
+    expect(classifyDirect('open firefox')).toMatchObject({ tool: 'computer-control', args: { action: 'launch_app', app: 'firefox' } });
+  });
+
   it('classifies web searches', () => {
     expect(classifyDirect('search the web for quantum computing')).toMatchObject({ tool: 'search', args: { query: 'quantum computing' } });
     expect(classifyDirect('search for best pizza')).toMatchObject({ tool: 'search' });
