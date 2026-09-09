@@ -352,7 +352,7 @@ jobs:
 
           python3 blaxin/update/build-manifest.py \
             --version "$VERSION_NUM" \
-            --notes "BLAXIN v$VERSION — See https://github.com/${{ github.repository }}/releases/tag/$VERSION for details." \
+            --notes "BLAXIN $VERSION — See https://github.com/${{ github.repository }}/releases/tag/$VERSION for details." \
             --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             --appimage-url "https://github.com/${{ github.repository }}/releases/download/${VERSION}/BLAXIN_${VERSION_NUM}_amd64.AppImage" \
             --appimage-sig "artifacts/BLAXIN_${VERSION_NUM}_amd64.AppImage.sig" \
