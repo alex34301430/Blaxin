@@ -83,6 +83,80 @@ export interface CapabilityInfo {
 
 export type MemoryType = 'preference' | 'fact' | 'project' | 'action-result';
 
+export type QueueTaskStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
+export interface QueueTask {
+  id: string;
+  objective: string;
+  priority: number;
+  status: QueueTaskStatus;
+  dependsOn: string[];
+  missionId?: string;
+  createdAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  result?: string;
+  error?: string;
+}
+
+export type MissionStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
+export interface MissionStep {
+  id: string;
+  description: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  result?: string;
+  error?: string;
+  checkpoint?: { completedAt: number; summary: string };
+}
+
+export interface Mission {
+  id: string;
+  objective: string;
+  description?: string;
+  priority: number;
+  status: MissionStatus;
+  progress: number;
+  steps: MissionStep[];
+  currentStepIndex: number;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  history: string[];
+  errors: string[];
+}
+
+export interface SecurityEvent {
+  id: string;
+  time: number;
+  category: string;
+  message: string;
+}
+
+export interface SystemStatus {
+  version: string;
+  mode: 'embedded' | 'external';
+  deviceId: string;
+  uptime: number;
+  state: string;
+  activeProvider: string | null;
+  activeModel: string | null;
+  providers: Array<{ id: string; hasKey: boolean }>;
+  security: { encryption: string; keysConfigured: number; originPolicy: string };
+  queue: { count: number };
+  missions: { count: number };
+  tools: { count: number };
+}
+
+export interface NetworkTelemetry {
+  timestamp: number;
+  rxBytesPerSec: number;
+  txBytesPerSec: number;
+  interfaces: Array<{ name: string; rxBytes: number; txBytes: number }>;
+  rxTotalBytes: number;
+  txTotalBytes: number;
+}
+
 export interface MemoryEntry {
   id: string;
   type: MemoryType;
@@ -414,6 +488,42 @@ export const api = {
   deleteMemory: (id: string) =>
     fetchAPI<{ success: boolean }>(`/memory/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   clearMemory: () => fetchAPI<{ success: boolean }>('/memory', { method: 'DELETE' }),
+
+  // Jarvis: queue, missions, security, status
+  getQueue: () => fetchAPI<{ tasks: QueueTask[] }>('/queue'),
+
+  enqueueTask: (objective: string, priority?: number) =>
+    fetchAPI<{ success: boolean; task: QueueTask }>('/queue', {
+      method: 'POST',
+      body: JSON.stringify({ objective, priority }),
+    }),
+
+  queueAction: (id: string, action: 'cancel' | 'pause' | 'resume') =>
+    fetchAPI<{ success: boolean }>(`/queue/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST',
+      body: '{}',
+    }),
+
+  getMissions: () => fetchAPI<{ missions: Mission[] }>('/missions'),
+
+  createMission: (input: { objective: string; description?: string; steps?: string[]; priority?: number }) =>
+    fetchAPI<{ success: boolean; mission: Mission }>('/missions', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+
+  missionAction: (id: string, action: 'pause' | 'resume' | 'cancel' | 'retry') =>
+    fetchAPI<{ success: boolean }>(`/missions/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST',
+      body: '{}',
+    }),
+
+  getSecurityEvents: (limit = 50) =>
+    fetchAPI<{ events: SecurityEvent[] }>(`/security/events?limit=${limit}`),
+
+  getStatus: () => fetchAPI<SystemStatus>('/status'),
+
+  getNetworkTelemetry: () => fetchAPI<NetworkTelemetry>('/system/network'),
 
   // Agent
   sendMessage: (message: string) =>

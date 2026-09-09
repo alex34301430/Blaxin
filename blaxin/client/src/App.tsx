@@ -6,6 +6,7 @@ import { TerminalPanel } from './components/TerminalPanel';
 import { SettingsModal } from './components/SettingsModal';
 import { StatusBar } from './components/StatusBar';
 import { ConfirmationModal } from './components/ConfirmationModal';
+import { HudView } from './components/hud/HudView';
 import { DiagnosticsPage } from './pages/DiagnosticsPage';
 import { MetricsPage } from './pages/MetricsPage';
 import { BrainPage } from './pages/BrainPage';
@@ -19,12 +20,23 @@ import { useWebSocket } from './hooks/useWebSocket';
 import { useAudioFeedback, useAudioUnlock } from './hooks/useAudioFeedback';
 import { api } from './services/api';
 import './theme/cyberpunk.css';
+import './theme/jarvis.css';
 
 const SETUP_KEY = 'blaxin-setup-complete';
 
 export default function App() {
   const { connected, settingsOpen, sidebarOpen, currentPage, activeModel, pendingConfirmation } = useAppStore();
-  const { sendMessage, stopAgent, clearHistory, respondToConfirmation } = useWebSocket();
+  const {
+    sendMessage,
+    sendCommand,
+    enqueueTask,
+    queueAction,
+    createMission,
+    missionAction,
+    stopAgent,
+    clearHistory,
+    respondToConfirmation,
+  } = useWebSocket();
   const [showSetup, setShowSetup] = useState(false);
 
   // JARVIS audio identity: sounds on real state transitions, mute/volume
@@ -87,28 +99,26 @@ export default function App() {
   return (
     <div className="app-container">
       <div className="grid-overlay" />
-      
+
       {sidebarOpen && <Sidebar />}
-      
-      <main style={{ 
-        flex: 1, 
-        display: 'flex', 
+
+      <main style={{
+        flex: 1,
+        display: 'flex',
         flexDirection: 'column',
-        position: 'relative', 
+        position: 'relative',
         zIndex: 1,
         overflow: 'hidden',
       }}>
         <StatusBar onStop={stopAgent} onClear={clearHistory} />
-        
+
         {currentPage === 'chat' && (
-          <div style={{ 
-            flex: 1, 
-            display: 'flex', 
-            overflow: 'hidden',
-          }}>
-            <ChatPanel sendMessage={sendMessage} stopAgent={stopAgent} clearHistory={clearHistory} />
-            <ActivityPanel />
-          </div>
+          <HudView
+            sendMessage={sendMessage}
+            stopAgent={stopAgent}
+            clearHistory={clearHistory}
+            queueAction={queueAction}
+          />
         )}
 
         {currentPage === 'terminal' && (

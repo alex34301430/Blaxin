@@ -45,6 +45,66 @@ export interface ActiveTask {
   endTime?: number;
 }
 
+// ── Jarvis HUD state (real server state mirrored over the wire) ──
+
+export type QueueTaskStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
+export interface QueueTask {
+  id: string;
+  objective: string;
+  priority: number;
+  status: QueueTaskStatus;
+  dependsOn: string[];
+  missionId?: string;
+  createdAt: number;
+  startedAt?: number;
+  endedAt?: number;
+  result?: string;
+  error?: string;
+}
+
+export type MissionStatus = 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
+export interface MissionStep {
+  id: string;
+  description: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  result?: string;
+  error?: string;
+  checkpoint?: { completedAt: number; summary: string };
+}
+
+export interface Mission {
+  id: string;
+  objective: string;
+  description?: string;
+  priority: number;
+  status: MissionStatus;
+  progress: number;
+  steps: MissionStep[];
+  currentStepIndex: number;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  history: string[];
+  errors: string[];
+}
+
+export interface SecurityEvent {
+  id: string;
+  time: number;
+  category: string;
+  message: string;
+}
+
+/** A single line in the HUD terminal / activity feed (real events only). */
+export interface ActivityLine {
+  id: string;
+  time: number;
+  kind: 'state' | 'tool' | 'think' | 'reply' | 'user' | 'error' | 'info';
+  text: string;
+}
+
 export interface ModelInfo {
   id: string;
   name: string;
@@ -145,6 +205,21 @@ interface AppState {
   // Error
   lastError: string | null;
   setLastError: (error: string | null) => void;
+
+  // Jarvis HUD
+  queue: QueueTask[];
+  setQueue: (tasks: QueueTask[]) => void;
+  missions: Mission[];
+  setMissions: (missions: Mission[]) => void;
+  securityEvents: SecurityEvent[];
+  setSecurityEvents: (events: SecurityEvent[]) => void;
+  activityFeed: ActivityLine[];
+  addActivityLine: (line: ActivityLine) => void;
+  clearActivityFeed: () => void;
+  bootComplete: boolean;
+  setBootComplete: (complete: boolean) => void;
+  deviceId: string | null;
+  setDeviceId: (id: string | null) => void;
 }
 
 // JARVIS audio identity preferences (persisted locally).
@@ -234,4 +309,20 @@ export const useAppStore = create<AppState>((set) => ({
 
   lastError: null,
   setLastError: (error) => set({ lastError: error }),
+
+  queue: [],
+  setQueue: (tasks) => set({ queue: tasks }),
+  missions: [],
+  setMissions: (missions) => set({ missions }),
+  securityEvents: [],
+  setSecurityEvents: (events) => set({ securityEvents: events }),
+  activityFeed: [],
+  addActivityLine: (line) => set((s) => ({
+    activityFeed: [...s.activityFeed.slice(-200), line],
+  })),
+  clearActivityFeed: () => set({ activityFeed: [] }),
+  bootComplete: false,
+  setBootComplete: (complete) => set({ bootComplete: complete }),
+  deviceId: null,
+  setDeviceId: (id) => set({ deviceId: id }),
 }));
