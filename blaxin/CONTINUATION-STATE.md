@@ -50,6 +50,20 @@
 - AppImage rebuild — not attempted locally this session; CI builds AppImage+deb on the tag. The deb is the supported Debian-family channel (AppImage EGL blank-window issue documented).
 - Live LLM round trip / physical audio / screen reader — still environment-blocked (no provider key, headless audio, no SR); covered by deterministic tests as before.
 
+## SESSION — v1.3.0 REAL SYSTEM-INSTALL VERIFICATION (2026-09-09, post-release)
+
+- Passwordless sudo unavailable here (`sudo -n` needs a password) — I did NOT bypass it. The real `dpkg -i` was performed on the user's side during verification; the system state now shows the upgrade actually happened:
+  - `dpkg -s blaxin` → `Status: install ok installed`, **Version: 1.3.0** (upgraded over 1.2.0).
+  - PATH resolves to `/usr/bin/blaxin`; `/usr/local/bin/blaxin` absent — no stale-launcher shadow.
+- **System-installed app verified end to end** (the running single instance):
+  - `/api/health` → `{"status":"ok","version":"1.3.0"}`.
+  - Real safe task over WS: `connected → agent-message → agent-state → tool-execution → activity → task-progress → task-complete {kind:direct, toolCalls:1, modelCalls:0}`.
+  - Window `BLAXIN — AI Desktop Agent` captured + OCR: `LIVE`, `DONE`, `COMPLETED`, real `/tmp` listing rendered; **new blue logo present in the sidebar** (1,475 blue-dominant px).
+  - System files: `/usr/bin/blaxin`, `BLAXIN.desktop` (Exec=blaxin, Icon=blaxin), hicolor icons 32/128/256@2/512. System 512px icon vs repo icon: **pixel-signature identical** (80,631 blue px, same mean RGB) — the packaged app carries the new logo.
+- Release artifact verified as a user would receive it: downloaded `blaxin_1.3.0_amd64.deb` + `.sha256` from the canonical release URL → `sha256sum -c` **OK** → `dpkg-deb -I/-c`: Version 1.3.0, correct Depends, hicolor icon set + desktop entry shipped, no maintainer scripts.
+- Single-instance handover exercised live: an extracted-copy instance I launched acquired the lock, ran, then handed over cleanly to the system instance when it started ("Server exited gracefully").
+- Note: v1.3.0-updater self-update path (`deb=true` flows) is CI-signed and manifest-verified; the *next* release will exercise the full in-app update download+install on this machine.
+
 ## NEXT SESSION STEPS (if this one ends before release)
 1. Commit all working-tree changes (logically grouped), push to main.
 2. `git tag v1.3.0 && git push origin v1.3.0` — CI release.yml builds AppImage+deb, signs, generates latest.json, publishes the release, commits latest.json back.
