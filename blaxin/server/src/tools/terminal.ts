@@ -57,18 +57,43 @@ export class TerminalTool implements Tool {
       return {
         success: true,
         output: output || (errorOutput ? `(stderr) ${errorOutput}` : '(no output)'),
-        data: { stdout: output, stderr: errorOutput },
+        data: { stdout: output, stderr: errorOutput, exitCode: 0 },
       };
     } catch (error: any) {
       const stdout = error.stdout?.trim() || '';
       const stderr = error.stderr?.trim() || error.message;
-      
+      const exitCode = typeof error.code === 'number' ? error.code : undefined;
+      const timedOut = error.killed === true || error.signal === 'SIGTERM';
+
+      // Verification-in-depth (§12): a nonzero exit IS a failure even when
+      // the command produced stdout (grep -q, test, diff ...). The error
+      // carries the real exit code so the agent can diagnose honestly.
+      if (exitCode !== undefined && exitCode !== 0) {
+        return {
+          success: false,
+          output: stdout || '',
+          error: `Command failed with exit code ${exitCode}${stderr ? `: ${stderr}` : ''}`.slice(0, 2000),
+          data: { exitCode, stdout, stderr },
+        };
+      }
+
+      // Timeout kill or signal death without a shell exit code: the
+      // outcome is UNKNOWN, not success — report the real signal.
+      if (timedOut || error.signal) {
+        return {
+          success: false,
+          output: stdout || '',
+          error: `Command did not complete (${timedOut ? `timed out after ${timeout / 1000}s` : `killed by ${error.signal}`})${stderr ? `: ${stderr}` : ''}`.slice(0, 2000),
+          data: { exitCode: exitCode ?? null, stdout, stderr, signal: error.signal ?? null },
+        };
+      }
+
       return {
         success: false,
         output: stdout || '',
         error: stderr,
-        data: { 
-          exitCode: error.code,
+        data: {
+          exitCode: exitCode ?? null,
           stdout,
           stderr,
         },

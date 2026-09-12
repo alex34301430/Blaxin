@@ -4,6 +4,8 @@ import { BootOverlay } from './BootOverlay';
 import { ParticleCanvas } from './ParticleCanvas';
 import { HudHeader } from './HudHeader';
 import { NeuralStatusPanel } from './NeuralStatusPanel';
+import { JarvisPanel } from './JarvisPanel';
+import { AgencyPanel } from './AgencyPanel';
 import { MemoryBankPanel } from './MemoryBankPanel';
 import { TaskQueuePanel } from './TaskQueuePanel';
 import { AgentTerminalPanel } from './AgentTerminalPanel';
@@ -53,6 +55,8 @@ export function HudView({ sendMessage, stopAgent, clearHistory, queueAction }: H
         {/* LEFT COLUMN */}
         <div className="jh-col">
           <NeuralStatusPanel />
+          <JarvisPanel />
+          <AgencyPanel />
           <MemoryBankPanel />
           <TaskQueuePanel onQueueAction={queueAction} />
         </div>

@@ -13,6 +13,18 @@ import { credentialStore } from './utils/credentials.js';
 import { runDiagnostics } from './utils/diagnostics.js';
 import { sessionState } from './utils/session-state.js';
 import { memoryStore, MemoryType, MemoryEntry, looksSensitive } from './utils/memory.js';
+import { memoryLayers } from './memory/layers.js';
+
+// Wire the REAL layered-memory runtime into the orchestrator (§20+):
+// run outcomes (episodes/failures/verified environment observations)
+// persist, and the advisor reads task-relevant slices back per task.
+// The orchestrator singleton already defaults to memoryLayers; this makes
+// the wiring explicit and survives future dependency-injection changes.
+orchestrator.setMemoryRuntime(memoryLayers);
+
+// Wire the REAL layered-memory runtime into the orchestrator (§20+):
+// run outcomes (episodes/failures/verified environment observations)
+// persist, and the advisor reads task-relevant slices back per task.
 import { telemetry, parseMetricsLimit } from './utils/telemetry.js';
 import {
   corsOriginValidator,
@@ -26,6 +38,8 @@ import { APP_VERSION, GITHUB_REPO, GITHUB_RELEASES_URL } from './utils/version.j
 import { getSystemTelemetry, getNetworkTelemetry } from './utils/system-telemetry.js';
 import { dataPath } from './utils/paths.js';
 import { loadOrCreateIdentity } from './distributed/identity.js';
+import { AgencyRegistry } from './agency/registry.js';
+import { browserSession } from './tools/browser-session.js';
 import { RemoteBrainDriver } from './distributed/remote-brain.js';
 import { validateBrainUrl } from './distributed/transport-policy.js';
 import { OllamaRuntime } from './models/ollama-runtime.js';
@@ -38,6 +52,8 @@ import { MissionStore } from './utils/missions.js';
 import { securityLog } from './utils/security-log.js';
 import { JarvisScheduler } from './utils/scheduler.js';
 import { classifyCommand, commandHelpText } from './router/commands.js';
+import { createJarvisHost } from './jarvis/host.js';
+import type { JarvisDirective } from './jarvis/types.js';
 import { ProviderId, AppConfig } from './types.js';
 
 // ── External Brain mode ─────────────────────────────────────────
@@ -55,18 +71,99 @@ const BRAIN_URL = process.env.BLAXIN_BRAIN_URL || '';
 
 let remoteBrain: RemoteBrainDriver | null = null;
 
+// ── Event hub ──────────────────────────────────────────────
+// Every real agent event flows through here: broadcast to WS clients
+// AND fed to the subscribers below (scheduler, Jarvis). One source of
+// truth — nothing subscribes to a parallel copy of the truth.
+type AgentEventListener = (event: string, data: any) => void;
+const agentEventListeners: AgentEventListener[] = [];
+function onAgentEvent(listener: AgentEventListener): void {
+  agentEventListeners.push(listener);
+}
+
 // ── Jarvis task queue + missions (embedded mode) ───────────────
 // Persistent user-level task queue and mission store. The scheduler
 // is the single path that feeds work to the orchestrator, so queue
 // tasks run one at a time and missions advance on verified completion.
 const queue = new TaskQueue();
 const missions = new MissionStore();
+
+// ── Agency registry (REAL worker visibility) ─────────────────
+// Tracks role activations of the EXISTING agent: every real tool
+// execution becomes a worker keyed by its real step id. Lifecycle is
+// driven ONLY by real events — nothing is ever activated decoratively.
+const agency = new AgencyRegistry((snapshot) => broadcast('agency-updated', snapshot));
+onAgentEvent((event, data) => {
+  switch (event) {
+    case 'agent-state':            agency.onAgentState(data); break;
+    case 'tool-execution':         agency.onToolExecution(data); break;
+    case 'confirmation-required':  agency.onConfirmationRequired(data); break;
+    case 'task-progress':          agency.onTaskProgress(data); break;
+    case 'task-complete':          agency.onTaskComplete(data); break;
+    case 'queue-updated':          agency.onQueueUpdated(data?.tasks ?? []); break;
+  }
+});
+
+/** Broadcast AND feed every hub subscriber (single source of truth). */
+function emitAll(event: string, data: unknown): void {
+  broadcast(event, data);
+  for (const listener of agentEventListeners) {
+    try {
+      listener(event, data);
+    } catch (error: any) {
+      logger.warn('events', `Listener for ${event} failed: ${error.message}`);
+    }
+  }
+}
+
 const scheduler = new JarvisScheduler({
   queue,
   missions,
   orchestrator,
+  emit: emitAll,
+});
+
+// ── JARVIS — the user-facing executive layer ──────────────
+// Jarvis receives commands (text/voice), routes them (fast/standard/
+// mission), issues a structured directive, and reports the honest
+// outcome from real events. The agent path stays unchanged: queue →
+// scheduler → orchestrator. Mission-routed directives create a
+// persistent mission (checkpointed, resumable) instead of a one-shot
+// queue task.
+const jarvisHost = createJarvisHost({
+  events: { on: onAgentEvent },
+  executeGoal: (directive: JarvisDirective) => {
+    if (directive.complexity === 'mission') {
+      // Mission-routed: split into explicit steps when the directive
+      // carries a plan; otherwise the objective decomposes at runtime.
+      const mission = missions.create({
+        objective: directive.goal,
+        priority: directive.priority,
+        steps: undefined,
+      });
+      scheduler.pump();
+      return { taskId: mission.id, missionId: mission.id };
+    }
+    // Standard/fast: the existing single path — persistent queue task.
+    const task = queue.enqueue({
+      objective: directive.goal,
+      priority: directive.priority,
+      directive: {
+        id: directive.id,
+        complexity: directive.complexity,
+        reason: directive.reason,
+        successCondition: directive.successCondition,
+        source: directive.source,
+      },
+    });
+    scheduler.pump();
+    return { taskId: task.id };
+  },
+  hasConversationHistory: () => sessionState.getHistory().length > 0,
   emit: broadcast,
 });
+// Mission-store changes flow through the scheduler's emit (emitAll), so
+// the engine receives real 'mission-progress' events via the same hub.
 
 /** The device's persistent public identity (BLX-BODY-…). */
 function deviceIdentity() {
@@ -378,6 +475,10 @@ app.get('/api/system/telemetry', async (_req, res) => {
 });
 
 // Live network throughput (real /proc/net/dev deltas)
+app.get('/api/agency', (_req, res) => {
+  res.json(agency.snapshot());
+});
+
 app.get('/api/system/network', (_req, res) => {
   try {
     res.json(getNetworkTelemetry());
@@ -692,7 +793,10 @@ app.delete('/api/missions/:id', (req, res) => {
   res.json({ success: missions.remove(req.params.id) });
 });
 
-// ── Jarvis: security + status ─────────────────────────────────
+app.get('/api/jarvis/state', (_req, res) => {
+  res.json(jarvisHost.snapshot());
+});
+
 app.get('/api/security/events', (req, res) => {
   const limit = parseInt(String(req.query.limit || '50'), 10);
   res.json({ events: securityLog.list(Number.isFinite(limit) ? limit : 50) });
@@ -767,6 +871,37 @@ app.delete('/api/memory/:id', (req, res) => {
 
 app.delete('/api/memory', (_req, res) => {
   memoryStore.clear();
+  res.json({ success: true });
+});
+
+// Layered memory (§20+): the persistent failure/environment/episode/
+// procedure stores, surfaced for INSPECTION (memory must be inspectable
+// and governable — never a hidden influence).
+app.get('/api/memory/layers', (_req, res) => {
+  res.json(memoryLayers.snapshot());
+});
+
+app.delete('/api/memory/layers/:kind/:id', (req, res) => {
+  const kinds = ['failure', 'environment', 'episode', 'procedure'] as const;
+  const kind = kinds.find((k) => k === req.params.kind);
+  if (!kind) {
+    return res.status(400).json({ error: 'kind must be one of failure, environment, episode, procedure', code: 'BAD_KIND' });
+  }
+  const removed = memoryLayers.remove(kind, String(req.params.id || ''));
+  if (!removed) return res.status(404).json({ error: 'record not found', code: 'NOT_FOUND' });
+  res.json({ success: true });
+});
+
+app.delete('/api/memory/layers', (_req, res) => {
+  const snap = memoryLayers.snapshot();
+  for (const [kind, records] of [
+    ['failure', snap.failures],
+    ['environment', snap.environment],
+    ['episode', snap.episodes],
+    ['procedure', snap.procedures],
+  ] as const) {
+    for (const r of records) memoryLayers.remove(kind, r.id);
+  }
   res.json({ success: true });
 });
 
@@ -849,11 +984,20 @@ function broadcast(event: string, data: unknown): void {
 }
 
 orchestrator.setEventCallback((event, data) => {
-  broadcast(event, data);
+  // One path: broadcast + all hub subscribers (Jarvis engine) see the
+  // same real events. The scheduler keeps its explicit settlement hook.
+  emitAll(event, data);
   if (!isExternalMode()) scheduler.onOrchestratorEvent(event, data);
 });
 
 securityLog.onChange((events) => broadcast('security-events', { events }));
+
+// Browser-session lifecycle is REAL state (§22/§23): desyncs and losses
+// are surfaced so the HUD shows the true connection state — never a
+// fabricated healthy browser.
+browserSession.setEventListener((event) => {
+  broadcast('browser-session', { event, session: browserSession.snapshot() });
+});
 
 wss.on('connection', (ws) => {
   logger.info('websocket', 'Client connected');
@@ -875,14 +1019,22 @@ wss.on('connection', (ws) => {
           if (isExternalMode()) {
             getRemoteBrain()?.sendUserMessage(normalizeUserMessage(content));
           } else {
-            // Commands run deterministically (no LLM); everything else is
-            // scheduled through the persistent queue.
+            // Commands run deterministically (no LLM). Everything else
+            // goes through JARVIS: intent assessment → structured
+            // directive → queue/mission routing → honest reporting.
             const text = normalizeUserMessage(content);
             const cmd = classifyCommand(text);
             if (cmd) {
               handleCommand(cmd, ws);
             } else {
-              scheduler.enqueueUserMessage(text);
+              try {
+                jarvisHost.receiveCommand({ message: text, source: 'text' });
+              } catch (error: any) {
+                ws.send(JSON.stringify({
+                  event: 'error',
+                  data: { message: error.message, code: 'JARVIS_ERROR' },
+                }));
+              }
             }
           }
           break;
@@ -1013,6 +1165,10 @@ wss.on('connection', (ws) => {
   ws.send(JSON.stringify({ event: 'queue-updated', data: { tasks: queue.list() } }));
   ws.send(JSON.stringify({ event: 'mission-progress', data: { missions: missions.list() } }));
   ws.send(JSON.stringify({ event: 'security-events', data: { events: securityLog.list(50) } }));
+  // Jarvis snapshot: phase + last honest report (never stale HUD state).
+  ws.send(JSON.stringify({ event: 'jarvis-state', data: jarvisHost.snapshot() }));
+  // Agency snapshot: the real worker roster at connect time.
+  ws.send(JSON.stringify({ event: 'agency-updated', data: agency.snapshot() }));
   if (isExternalMode() && brain) {
     connectedPayload.bodyId = brain.status().bodyId;
     connectedPayload.brain = brain.status().brain ?? null;

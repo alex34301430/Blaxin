@@ -148,6 +148,10 @@ export interface AgentTask {
   endTime?: number;
   result?: string;
   error?: string;
+  /** Rendered Jarvis directive context attached to this run (real, from the directive). */
+  directiveContext?: string;
+  /** Skill runtime selections for THIS objective (real, from the registry; §14). */
+  skillsSelected?: Array<{ id: string; name: string; score: number; reason: string }>;
 }
 
 export interface TaskStep {

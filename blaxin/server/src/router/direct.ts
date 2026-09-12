@@ -333,6 +333,33 @@ export function classifyDirect(rawMessage: string): DirectAction | null {
     return null;
   }
 
+  // ── YouTube playback / search (grounded + verified blaxin_web) ──
+  // "play X on youtube" / "search youtube for X" are unambiguous,
+  // high-value browser automations: route them DETERMINISTICALLY to
+  // blaxin_web (grounded click on the real DOM + playback verified from
+  // the real video element), not to an app-launch guess or a generic LLM
+  // round trip. The orchestrator's normal confirmation gate still runs.
+  // NOTE: these are matched BEFORE the generic web-search patterns so
+  // "search X on youtube" stays a YouTube search, not a Google search.
+  const ytPlay = text.match(/^(?:play|watch)\s+(.+?)\s+(?:on\s+)?(?:youtube|yt)$/i);
+  if (ytPlay) {
+    const query = cleanTrailing(ytPlay[1]);
+    if (query && query.length <= 200) {
+      return { tool: 'blaxin_web', args: { action: 'youtube_play', query }, summary: `Playing “${query}” on YouTube…` };
+    }
+    return null;
+  }
+  const ytSearch = text.match(/^search\s+(?:youtube|yt)\s+for\s+(.+)$/i)
+    || text.match(/^search(?:\s+for)?\s+(.+?)\s+on\s+(?:youtube|yt)$/i)
+    || text.match(/^find(?:\s+me)?\s+(.+?)\s+on\s+(?:youtube|yt)$/i);
+  if (ytSearch) {
+    const query = cleanTrailing(ytSearch[1] ?? '');
+    if (query && query.length <= 200) {
+      return { tool: 'blaxin_web', args: { action: 'youtube_search', query }, summary: `Searching YouTube for “${query}”…` };
+    }
+    return null;
+  }
+
   // ── Web search ────────────────────────────────────────────────
   const searchMatch = text.match(/^(?:search(\s+(?:the\s+)?(?:web|internet|online))?\s+for\s+|google\s+)(.+)$/i);
   if (searchMatch) {

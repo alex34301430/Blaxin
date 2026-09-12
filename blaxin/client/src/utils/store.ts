@@ -97,6 +97,88 @@ export interface SecurityEvent {
   message: string;
 }
 
+// ── Jarvis layer state (real server state mirrored over the wire) ──
+
+export type JarvisPhase = 'idle' | 'understanding' | 'routing' | 'delegated' | 'reporting';
+
+export interface JarvisDirective {
+  id: string;
+  goal: string;
+  context: {
+    previousExchange?: { request: string; outcome: string } | null;
+    missionId?: string;
+    missionObjective?: string;
+    plannedSteps?: number;
+  };
+  constraints: string[];
+  successCondition?: string;
+  priority: number;
+  complexity: 'fast' | 'standard' | 'mission';
+  reason: string;
+  source: 'text' | 'voice';
+  issuedAt: number;
+}
+
+export interface AgentReport {
+  directiveId: string;
+  taskId?: string;
+  status: 'SUCCESS' | 'PARTIAL' | 'FAILED' | 'STOPPED' | 'NOT_EXECUTED';
+  /** Real per-step outcomes (bounded). `id` is the runtime's own step identity. */
+  evidence: Array<{ id: string; description: string; state: string; result?: string; error?: string }>;
+  summary?: string;
+  metrics?: { totalMs: number; modelCalls: number; toolCalls: number; kind: string };
+  blockers: string[];
+  reportedAt: number;
+}
+
+export interface JarvisSnapshot {
+  phase: JarvisPhase;
+  directive: JarvisDirective | null;
+  lastReport: AgentReport | null;
+}
+
+// ── Agency layer (real worker activations of the existing agent) ──
+
+export type WorkerState =
+  | 'queued' | 'running' | 'waiting' | 'blocked'
+  | 'completed' | 'failed' | 'skipped' | 'retrying' | 'cancelled';
+
+export interface WorkerRecord {
+  /** REAL id — the runtime step id (never generated for display). */
+  id: string;
+  taskId?: string;
+  role: string;
+  tool: string;
+  toolKnown: boolean;
+  description: string;
+  state: WorkerState;
+  startedAt?: number;
+  endedAt?: number;
+  result?: string;
+  error?: string;
+  attempts: number;
+  permissionScope?: string;
+}
+
+export interface AgencySnapshot {
+  agentState: string;
+  agentDescription: string | null;
+  taskWaiting: boolean;
+  workers: WorkerRecord[];
+  activeCount: number;
+  queueWaiting: number;
+  queuedTasks: Array<{ id: string; status: string; objective: string }>;
+}
+
+export type VoiceState =
+  | 'MIC_OFF'
+  | 'LISTENING'
+  | 'VOICE_DETECTED'
+  | 'TRANSCRIBING'
+  | 'UNDERSTANDING'
+  | 'SPEAKING'
+  | 'ERROR';
+
 /** A single line in the HUD terminal / activity feed (real events only). */
 export interface ActivityLine {
   id: string;
@@ -220,6 +302,19 @@ interface AppState {
   setBootComplete: (complete: boolean) => void;
   deviceId: string | null;
   setDeviceId: (id: string | null) => void;
+
+  // JARVIS executive layer (real server snapshot via jarvis-state)
+  jarvis: JarvisSnapshot;
+  setJarvisSnapshot: (snapshot: JarvisSnapshot) => void;
+
+  // Agency: real worker activations (server-driven; empty until the
+  // agent really runs something).
+  agency: AgencySnapshot | null;
+  setAgencySnapshot: (snapshot: AgencySnapshot) => void;
+
+  // Voice state (REAL: derived from actual mic/STT/submit transitions)
+  voiceState: VoiceState;
+  setVoiceState: (state: VoiceState) => void;
 }
 
 // JARVIS audio identity preferences (persisted locally).
@@ -325,4 +420,13 @@ export const useAppStore = create<AppState>((set) => ({
   setBootComplete: (complete) => set({ bootComplete: complete }),
   deviceId: null,
   setDeviceId: (id) => set({ deviceId: id }),
+
+  jarvis: { phase: 'idle', directive: null, lastReport: null },
+  setJarvisSnapshot: (snapshot) => set({ jarvis: snapshot }),
+
+  agency: null,
+  setAgencySnapshot: (snapshot) => set({ agency: snapshot }),
+
+  voiceState: 'MIC_OFF',
+  setVoiceState: (state) => set({ voiceState: state }),
 }));

@@ -167,6 +167,28 @@ export interface MemoryEntry {
   scope?: string;
 }
 
+/** Layered-memory snapshot (§20+) — mirrors server memory/layers.ts. */
+export interface LayeredMemorySnapshot {
+  failures: Array<{
+    id: string; category: string; failedAction: string; observation: string;
+    cause?: string; recovery?: { description: string; at: number };
+    finalResult: string; occurrences: number; lastSeenAt: number; confidence: number;
+  }>;
+  environment: Array<{
+    id: string; key: string; value: string; volatility: string;
+    confirmations: number; confidence: number; updatedAt: number;
+  }>;
+  episodes: Array<{
+    id: string; objective: string; outcome: string; strategy: string;
+    lessons: string[]; verified: boolean; confidence: number; createdAt: number;
+  }>;
+  procedures: Array<{
+    id: string; name: string; purpose: string; steps: string[];
+    version: number; status: string; successCount: number; failureCount: number;
+    confidence: number;
+  }>;
+}
+
 export class ApiError extends Error {
   readonly status: number;
   readonly code?: string;
@@ -488,6 +510,12 @@ export const api = {
   deleteMemory: (id: string) =>
     fetchAPI<{ success: boolean }>(`/memory/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   clearMemory: () => fetchAPI<{ success: boolean }>('/memory', { method: 'DELETE' }),
+
+  // Layered memory (§20+): failure/environment/episode/procedure stores
+  getMemoryLayers: () => fetchAPI<LayeredMemorySnapshot>('/memory/layers'),
+  deleteMemoryLayer: (kind: string, id: string) =>
+    fetchAPI<{ success: boolean }>(`/memory/layers/${encodeURIComponent(kind)}/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  clearMemoryLayers: () => fetchAPI<{ success: boolean }>('/memory/layers', { method: 'DELETE' }),
 
   // Jarvis: queue, missions, security, status
   getQueue: () => fetchAPI<{ tasks: QueueTask[] }>('/queue'),

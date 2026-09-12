@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { api, MemoryEntry, MemoryType } from '../services/api';
+import { api, MemoryEntry, MemoryType, LayeredMemorySnapshot } from '../services/api';
 import {
   FiDatabase, FiSearch, FiTrash2, FiX, FiPlus, FiAlertTriangle,
   FiCheckCircle, FiInfo,
@@ -340,6 +340,188 @@ export function MemoryPage() {
           refused and never stored. Memory lives on this device under the BLAXIN data directory.
         </span>
       </div>
+
+      <LayeredMemoryPanel />
+    </div>
+  );
+}
+
+const LAYER_LABEL: Record<string, string> = {
+  failure: 'FAILURE',
+  environment: 'ENV',
+  episode: 'EPISODE',
+  procedure: 'PROCEDURE',
+};
+
+const LAYER_COLOR: Record<string, string> = {
+  failure: 'var(--accent-red)',
+  environment: 'var(--accent-secondary)',
+  episode: 'var(--accent-yellow)',
+  procedure: 'var(--accent-green)',
+};
+
+/**
+ * Layered memory (§20+): the persistent failure/environment/episode/
+ * procedure stores the agent writes REAL outcomes to. Inspectable and
+ * governable — every record can be deleted; nothing is hidden influence.
+ */
+function LayeredMemoryPanel() {
+  const [snap, setSnap] = useState<LayeredMemorySnapshot | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState(false);
+
+  const load = async () => {
+    try {
+      setSnap(await api.getMemoryLayers());
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  useEffect(() => { load(); }, []);
+
+  const remove = async (kind: string, id: string) => {
+    try {
+      await api.deleteMemoryLayer(kind, id);
+      setSnap((prev) => {
+        if (!prev) return prev;
+        return {
+          failures: prev.failures.filter((r) => r.id !== id),
+          environment: prev.environment.filter((r) => r.id !== id),
+          episodes: prev.episodes.filter((r) => r.id !== id),
+          procedures: prev.procedures.filter((r) => r.id !== id),
+        };
+      });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const counts = snap
+    ? `${snap.failures.length} failures · ${snap.environment.length} env · ${snap.episodes.length} episodes · ${snap.procedures.length} procedures`
+    : '…';
+  const isEmpty = snap !== null &&
+    snap.failures.length === 0 && snap.environment.length === 0 &&
+    snap.episodes.length === 0 && snap.procedures.length === 0;
+
+  return (
+    <div style={{
+      marginTop: 16, background: 'var(--bg-secondary)', border: '1px solid var(--border-subtle)',
+      borderRadius: 'var(--radius-lg)', overflow: 'hidden',
+    }}>
+      <div style={{
+        padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+      }}>
+        <span style={{ color: 'var(--accent-secondary)' }}><FiDatabase size={14} /></span>
+        <span style={{
+          fontSize: 12, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1,
+          color: 'var(--text-secondary)',
+        }}>
+          Task memory layers
+        </span>
+        <span style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+          {counts}
+        </span>
+        <div style={{ flex: 1 }} />
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          aria-expanded={expanded}
+          style={{
+            padding: '4px 10px', borderRadius: 'var(--radius-sm)', fontSize: 10, cursor: 'pointer',
+            background: 'var(--bg-tertiary)', color: 'var(--text-secondary)',
+            border: '1px solid var(--border-subtle)', fontFamily: 'var(--font-mono)',
+          }}
+        >
+          {expanded ? 'HIDE' : 'INSPECT'}
+        </button>
+      </div>
+
+      {expanded && (
+        <div style={{ padding: '0 16px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {error && <div style={{ fontSize: 11, color: 'var(--accent-red)' }}>{error}</div>}
+          {snap === null && !error && (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>Loading…</div>
+          )}
+          {isEmpty && (
+            <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+              NO TASK MEMORY YET — episodes, failure patterns and verified environment facts are recorded
+              automatically as tasks run, and only task-relevant slices enter future prompts.
+            </div>
+          )}
+          {snap && !isEmpty && (
+            <>
+              {snap.failures.map((f) => (
+                <LayerRow key={f.id} kind="failure" id={f.id} onDelete={remove}
+                  title={`[${f.category}] ${f.failedAction} ×${f.occurrences}`}
+                  meta={`${f.finalResult.toUpperCase()} · confidence ${f.confidence.toFixed(2)}`}
+                  body={f.observation + (f.recovery ? ` → recovery: ${f.recovery.description}` : '')} />
+              ))}
+              {snap.environment.map((e) => (
+                <LayerRow key={e.id} kind="environment" id={e.id} onDelete={remove}
+                  title={`${e.key.replace(/-/g, ' ')}: ${e.value}`}
+                  meta={`${e.volatility} · ${e.confirmations}× confirmed · confidence ${e.confidence.toFixed(2)}`}
+                  body="" />
+              ))}
+              {snap.episodes.map((ep) => (
+                <LayerRow key={ep.id} kind="episode" id={ep.id} onDelete={remove}
+                  title={`"${ep.objective}" → ${ep.outcome}${ep.verified ? ' (verified)' : ''}`}
+                  meta={`confidence ${ep.confidence.toFixed(2)}`}
+                  body={[ep.strategy, ...ep.lessons].filter(Boolean).join(' | ')} />
+              ))}
+              {snap.procedures.map((p) => (
+                <LayerRow key={p.id} kind="procedure" id={p.id} onDelete={remove}
+                  title={`${p.name} v${p.version} — ${p.purpose}`}
+                  meta={`${p.status} · ${p.successCount}✓ / ${p.failureCount}✗ · confidence ${p.confidence.toFixed(2)}`}
+                  body={p.steps.map((s, i) => `${i + 1}) ${s}`).join(' ')} />
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LayerRow(props: {
+  kind: string; id: string; title: string; meta: string; body: string;
+  onDelete: (kind: string, id: string) => void;
+}) {
+  return (
+    <div style={{
+      display: 'flex', alignItems: 'flex-start', gap: 10,
+      padding: '8px 10px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-md)',
+    }}>
+      <span style={{
+        padding: '2px 6px', borderRadius: 'var(--radius-sm)', fontSize: 9,
+        fontFamily: 'var(--font-mono)', letterSpacing: 0.5, marginTop: 2, flexShrink: 0,
+        background: LAYER_COLOR[props.kind] ?? 'var(--text-muted)', color: '#0b0b12', fontWeight: 700,
+      }}>
+        {LAYER_LABEL[props.kind] ?? props.kind}
+      </span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 12, color: 'var(--text-primary)', wordBreak: 'break-word' }}>{props.title}</div>
+        {props.body && (
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2, wordBreak: 'break-word' }}>
+            {props.body}
+          </div>
+        )}
+        <div style={{ marginTop: 3, fontSize: 9, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+          {props.meta}
+        </div>
+      </div>
+      <button
+        onClick={() => props.onDelete(props.kind, props.id)}
+        title="Delete this record"
+        aria-label="Delete this memory record"
+        style={{
+          padding: 4, cursor: 'pointer', background: 'transparent', border: 'none',
+          color: 'var(--text-muted)', borderRadius: 'var(--radius-sm)', flexShrink: 0,
+          display: 'flex',
+        }}
+      >
+        <FiTrash2 size={13} />
+      </button>
     </div>
   );
 }

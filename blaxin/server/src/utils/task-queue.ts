@@ -34,6 +34,14 @@ export interface QueueTask {
   missionId?: string;
   /** Optional link to the mission step this task satisfies. */
   missionStepId?: string;
+  /** Structured directive context carried from the Jarvis layer. */
+  directive?: {
+    id: string;
+    complexity: string;
+    reason: string;
+    successCondition?: string;
+    source: string;
+  };
   createdAt: number;
   startedAt?: number;
   endedAt?: number;
@@ -134,6 +142,7 @@ export class TaskQueue {
     dependsOn?: string[];
     missionId?: string;
     missionStepId?: string;
+    directive?: QueueTask['directive'];
   }): QueueTask {
     this.load();
     const objective = String(opts.objective || '').trim().slice(0, MAX_OBJECTIVE);
@@ -147,6 +156,7 @@ export class TaskQueue {
       dependsOn: [...(opts.dependsOn ?? [])],
       missionId: opts.missionId,
       missionStepId: opts.missionStepId,
+      directive: opts.directive,
       createdAt: Date.now(),
     };
     this.tasks.push(task);

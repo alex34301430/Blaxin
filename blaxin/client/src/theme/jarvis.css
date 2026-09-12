@@ -331,6 +331,50 @@
 .jh-mem-entry.new { background: rgba(0, 255, 159, 0.08); border-left-color: var(--accent-green); color: var(--text-secondary); }
 
 /* =============================================================
+   JARVIS — executive layer panel (real state only)
+   ============================================================= */
+.jh-jarvis-phase {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 10px; letter-spacing: 0.12em;
+  color: var(--border-primary);
+  margin-bottom: 6px;
+}
+.jh-jarvis-directive { margin-bottom: 6px; }
+.jh-jarvis-goal {
+  font-size: 10px; color: var(--text-primary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.jh-jarvis-meta { font-size: 8px; color: var(--text-dim); letter-spacing: 0.08em; margin-top: 2px; }
+.jh-jarvis-success { font-size: 8px; color: var(--accent-green); margin-top: 3px; letter-spacing: 0.05em; }
+.jh-jarvis-report { border-top: 1px solid rgba(0, 212, 255, 0.12); padding-top: 4px; }
+.jh-jarvis-status { font-size: 11px; letter-spacing: 0.18em; }
+.jh-jarvis-evidence {
+  list-style: none; padding: 0; margin: 4px 0 0 0;
+  font-size: 9px; color: var(--text-secondary);
+  display: flex; flex-direction: column; gap: 2px;
+  overflow: hidden;
+}
+.jh-jarvis-evidence li {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.jh-jarvis-blockers { margin-top: 4px; display: flex; flex-direction: column; gap: 2px; }
+.jh-jarvis-blocker {
+  font-size: 9px; color: var(--jh-danger, #ff5470);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.jh-jarvis-metrics { font-size: 8px; color: var(--text-dim); margin-top: 4px; letter-spacing: 0.05em; }
+.jh-jarvis-empty { font-size: 8px; color: var(--text-dim); letter-spacing: 0.15em; }
+.jh-dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--text-dim); flex-shrink: 0;
+}
+.jh-dot-live {
+  background: var(--border-primary);
+  box-shadow: 0 0 6px var(--border-primary);
+  animation: jh-core-pulse 2s ease-in-out infinite;
+}
+
+/* =============================================================
    TASK QUEUE
    ============================================================= */
 .jh-tasks { flex: 0 0 28%; }
@@ -519,3 +563,34 @@
 @media (prefers-reduced-motion: reduce) {
   .jh *, .jh *::before, .jh *::after { animation: none !important; transition: none !important; }
 }
+
+/* ── Agency panel — real worker activations ─────────────────── */
+.jh-agency-head {
+  display: flex; gap: 4px; flex-wrap: wrap;
+  font-size: 10px; letter-spacing: 1px; color: var(--jh-dim, #7d8aa5);
+  margin-bottom: 6px; font-family: var(--jh-mono, monospace);
+}
+.jh-agency-empty {
+  font-size: 11px; color: var(--jh-dim, #7d8aa5); letter-spacing: 1.5px;
+  padding: 8px 0; font-family: var(--jh-mono, monospace);
+}
+.jh-agency-subhead {
+  font-size: 9px; letter-spacing: 2px; color: var(--jh-dim, #7d8aa5);
+  margin: 8px 0 4px; font-family: var(--jh-mono, monospace);
+}
+.jh-agency-list { display: flex; flex-direction: column; gap: 4px; }
+.jh-agency-worker {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 11px; font-family: var(--jh-mono, monospace);
+  padding: 3px 6px; border-left: 2px solid rgba(0, 240, 255, 0.35);
+  background: rgba(0, 240, 255, 0.04);
+}
+.jh-agency-role {
+  color: var(--jh-accent, #00f0ff); font-size: 9px; letter-spacing: 1px;
+  min-width: 64px; flex-shrink: 0;
+}
+.jh-agency-desc {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; color: var(--jh-text, #c9d6e8);
+}
+.jh-agency-state { flex-shrink: 0; font-size: 9px; letter-spacing: 1px; }

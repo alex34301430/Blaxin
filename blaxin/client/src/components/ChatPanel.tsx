@@ -14,7 +14,7 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const { messages, agentState, agentDescription, lastError, setLastError, ttsEnabled, setTtsEnabled, voiceEnabled, setVoiceEnabled, audioEnabled, setAudioEnabled, audioVolume, setAudioVolume } = useAppStore();
+  const { messages, agentState, agentDescription, lastError, setLastError, ttsEnabled, setTtsEnabled, voiceEnabled, setVoiceEnabled, audioEnabled, setAudioEnabled, audioVolume, setAudioVolume, setVoiceState } = useAppStore();
 
   // Convert errors to visible messages in chat
   useEffect(() => {
@@ -34,10 +34,52 @@ export function ChatPanel({ sendMessage, stopAgent, clearHistory }: ChatPanelPro
     }
   }, [lastError]);
 
+  // Latest-value refs for state the voice submit callback reads. The
+  // callback is handed INTO useVoice (which keeps it in a latest-ref
+  // itself), so it must not lexically depend on anything returned BY
+  // useVoice — stopSpeaking lives below this call. Refs keep the
+  // callback identity stable AND its data current (no stale closures).
+  const agentStateRef = useRef(agentState);
+  const sendMessageRef = useRef(sendMessage);
+  useEffect(() => {
+    agentStateRef.current = agentState;
+    sendMessageRef.current = sendMessage;
+  });
+
+  // No stopSpeaking() here — it is not in scope yet (returned by the
+  // useVoice call below) and is not needed: useVoice performs the real
+  // barge-in (startListening cancels ongoing TTS at the source before the
+  // mic opens), so speech has already stopped by the time a voice command
+  // is submitted. Text sends still interrupt speech via handleSend below.
   const { startListening, stopListening, speak, stopSpeaking, isSupported, isListening, isSpeaking, voiceError } = useVoice({
     onFinalTranscript: useCallback((transcript: string) => {
-      setInput(prev => prev ? prev + ' ' + transcript : transcript);
-    }, []),
+      // Voice commands travel the SAME path as text: straight into
+      // Jarvis (the server routes them identically from here). The
+      // transcript still lands in the composer so the user sees what
+      // was understood — but the command is already submitted.
+      const text = transcript.trim();
+      setVoiceState('UNDERSTANDING'); // Jarvis receives + assesses now
+      if (!text) {
+        setVoiceState('MIC_OFF');
+        return;
+      }
+      const st = agentStateRef.current;
+      const canSend = st === 'idle' || st === 'completed' || st === 'error';
+      setInput('');
+      if (canSend) {
+        sendMessageRef.current(text);
+        // Jarvis flips the HUD phase on its own real events; voice
+        // returns to MIC_OFF once understanding is handed over.
+        setTimeout(() => {
+          const vs = useAppStore.getState().voiceState;
+          if (vs === 'UNDERSTANDING') setVoiceState('MIC_OFF');
+        }, 1200);
+      } else {
+        // Agent busy: queue it into the composer rather than lose it.
+        setInput(text);
+        setVoiceState('MIC_OFF');
+      }
+    }, [setVoiceState]),
   });
 
   // Auto-speak assistant messages when TTS is enabled

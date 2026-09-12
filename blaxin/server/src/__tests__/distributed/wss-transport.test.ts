@@ -136,7 +136,10 @@ describe('brain ↔ body over WSS (real TLS)', () => {
     await waitFor(() => !driver.isReady(), 5_000, 'disconnected');
     driver.connect();
     await waitFor(() => driver.isReady(), 40_000, 'reconnected by identity over WSS');
-  });
+    // Explicit per-test budget (overrides the 30s global): two real-TLS
+    // handshakes under load legitimately exceed 30s combined (observed
+    // 25.3s for one). Still bounded — a genuine hang fails, just slower.
+  }, 90_000);
 
   it('FAILS CLOSED when the certificate is signed by an untrusted CA', async () => {
     const dir = tmpDir('wss-body-badca-');

@@ -38,6 +38,8 @@ const MAX_CONTENT_LENGTH = 2000;
 const MAX_FILE_SIZE = 1024 * 1024; // 1MB
 
 // Mirrors the logger's sensitive patterns so memory never persists secrets.
+// Coverage: provider API keys, private keys, bearer/authorization headers,
+// passwords, cookies/session tokens, JWTs and cloud-platform tokens.
 const SENSITIVE_PATTERNS: RegExp[] = [
   /sk-or-v1-[a-zA-Z0-9-]{10,}/,
   /sk-ant-[a-zA-Z0-9-]{10,}/,
@@ -49,10 +51,60 @@ const SENSITIVE_PATTERNS: RegExp[] = [
   /Bearer\s+[A-Za-z0-9\-._~+/]{20,}/i,
   /api[_-]?key[=:]\s*['"]?[A-Za-z0-9\-._]{16,}/i,
   /authorization[=:]\s*['"]?[A-Za-z0-9\-._]{16,}/i,
+  // Passwords: password/passwd/pwd/passphrase followed by a value.
+  /\b(?:password|passwd|pwd|passphrase)\s*[=:]\s*['"]?[^\s'"]{6,}/i,
+  // Cookies and session/auth token material.
+  /\b(?:cookie|cookies|set[-_]cookie)\s*[:=]\s*['"]?[A-Za-z0-9\-._~+/=]{10,}/i,
+  /\b(?:session[-_]?id|auth[-_]?token|access[-_]?token|refresh[-_]?token|api[-_]?token|client[-_]?secret|secret)\s*[:=]\s*['"]?[A-Za-z0-9\-._~+/=]{10,}/i,
+  // JWTs (three base64url segments, header always starts with eyJ).
+  /\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/,
+  // Cloud/SCM tokens.
+  /\bgh[pousr]_[A-Za-z0-9]{20,}/,
+  /\bxox[baprs]-[A-Za-z0-9-]{10,}/,
+  /\bAKIA[0-9A-Z]{16}/,
+];
+
+/** Full PEM blocks (header AND body) — used only for redaction. */
+const PEM_BLOCK_PATTERN = /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?-----END [^-]*PRIVATE KEY-----/g;
+
+const REDACTION_PATTERNS: RegExp[] = [
+  PEM_BLOCK_PATTERN,
+  ...SENSITIVE_PATTERNS.map((p) => new RegExp(p.source, p.flags.includes('g') ? p.flags : p.flags + 'g')),
 ];
 
 export function looksSensitive(content: string): boolean {
   return SENSITIVE_PATTERNS.some((p) => p.test(content));
+}
+
+/**
+ * Replace every secret-looking substring with [REDACTED]. Used BEFORE any
+ * memory persistence so surrounding useful context can be kept without
+ * carrying credentials. Content that STILL looks sensitive after redaction
+ * must be refused outright by the caller.
+ */
+export function redactSecrets(text: string): string {
+  let out = String(text || '');
+  for (const p of REDACTION_PATTERNS) {
+    out = out.replace(p, '[REDACTED]');
+  }
+  return out;
+}
+
+/**
+ * Deep-redact every string value in a JSON-safe structure (records saved
+ * to the layered memory files go through this before persistence).
+ */
+export function redactDeep<T>(value: T): T {
+  if (typeof value === 'string') return redactSecrets(value) as unknown as T;
+  if (Array.isArray(value)) return value.map((v) => redactDeep(v)) as unknown as T;
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = redactDeep(v);
+    }
+    return out as unknown as T;
+  }
+  return value;
 }
 
 class MemoryStore {
@@ -97,10 +149,20 @@ class MemoryStore {
   add(
     type: MemoryType,
     content: string,
-    options: { source?: MemoryEntry['source']; scope?: string } = {},
+    options: {
+      source?: MemoryEntry['source'];
+      scope?: string;
+      /** Redact secret-looking substrings before the sensitivity check. */
+      redact?: boolean;
+    } = {},
   ): MemoryEntry | null {
-    const text = String(content || '').trim();
+    let text = String(content || '').trim();
     if (!text) return null;
+
+    if (options.redact) {
+      text = redactSecrets(text).trim();
+      if (!text || text === '[REDACTED]') return null;
+    }
 
     if (looksSensitive(text)) {
       logger.warn('memory', 'Refusing to store memory entry that looks like a secret');

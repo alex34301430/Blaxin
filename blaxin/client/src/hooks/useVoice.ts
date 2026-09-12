@@ -23,6 +23,16 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Latest-ref mirrors of the caller's callbacks. Recognition handlers are
+  // installed once on mount, so they must always invoke the CURRENT
+  // callback, never the one captured at mount (stale closure).
+  const onTranscriptRef = useRef(options?.onTranscript);
+  const onFinalTranscriptRef = useRef(options?.onFinalTranscript);
+  useEffect(() => {
+    onTranscriptRef.current = options?.onTranscript;
+    onFinalTranscriptRef.current = options?.onFinalTranscript;
+  });
   const [isSpeakingState, setIsSpeaking] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
   const {
@@ -31,6 +41,7 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
     isListening,
     setIsListening,
     setVoiceTranscript,
+    setVoiceState,
   } = useAppStore();
 
   const isSupported = typeof window !== 'undefined' && 
@@ -65,12 +76,14 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
 
       if (interimTranscript) {
         setVoiceTranscript(interimTranscript);
-        options?.onTranscript?.(interimTranscript);
+        setVoiceState('VOICE_DETECTED');
+        onTranscriptRef.current?.(interimTranscript);
       }
 
       if (finalTranscript) {
         setVoiceTranscript(finalTranscript);
-        options?.onFinalTranscript?.(finalTranscript);
+        setVoiceState('TRANSCRIBING');
+        onFinalTranscriptRef.current?.(finalTranscript);
         setIsListening(false);
       }
     };
@@ -94,6 +107,7 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
       }
       setVoiceError(message);
       setIsListening(false);
+      if (message) setVoiceState('ERROR');
       if (message && errorTimerRef.current) clearTimeout(errorTimerRef.current);
       errorTimerRef.current = setTimeout(() => setVoiceError(null), 5000);
       console.warn('[BLAXIN] Speech recognition error:', code);
@@ -101,6 +115,12 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
 
     recognition.onend = () => {
       setIsListening(false);
+      // Return to MIC_OFF only from listening states — never overwrite
+      // an error state or the post-submit UNDERSTANDING state.
+      const st = useAppStore.getState().voiceState;
+      if (st === 'LISTENING' || st === 'VOICE_DETECTED') {
+        setVoiceState('MIC_OFF');
+      }
     };
 
     recognitionRef.current = recognition;
@@ -118,8 +138,16 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
     synthRef.current = window.speechSynthesis || null;
     if (!synthRef.current) return;
 
-    const handleSpeaking = () => setIsSpeaking(true);
-    const handleSilent = () => setIsSpeaking(false);
+    const handleSpeaking = () => {
+      setIsSpeaking(true);
+      // REAL state: TTS actually started (not just requested).
+      setVoiceState('SPEAKING');
+    };
+    const handleSilent = () => {
+      setIsSpeaking(false);
+      const st = useAppStore.getState().voiceState;
+      if (st === 'SPEAKING') setVoiceState('MIC_OFF');
+    };
     synthRef.current.addEventListener('start', handleSpeaking);
     synthRef.current.addEventListener('end', handleSilent);
     synthRef.current.addEventListener('pause', handleSilent);
@@ -135,13 +163,17 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
 
   const startListening = useCallback(() => {
     if (!recognitionRef.current || isListening) return;
-    
+
     try {
-      // Stop any ongoing speech
+      // Barge-in at the source: opening the mic really stops TTS (same
+      // cancel() stopSpeaking uses), so speech genuinely cannot continue
+      // under an open microphone.
       synthRef.current?.cancel();
-      
+
       recognitionRef.current.start();
       setIsListening(true);
+      // REAL voice state: the mic is genuinely open now.
+      setVoiceState('LISTENING');
       setVoiceTranscript('');
       setVoiceError(null);
     } catch (err) {
@@ -152,11 +184,12 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
 
   const stopListening = useCallback(() => {
     if (!recognitionRef.current) return;
-    
+
     try {
       recognitionRef.current.stop();
     } catch {}
     setIsListening(false);
+    setVoiceState('MIC_OFF');
   }, []);
 
   const speak = useCallback((text: string) => {
@@ -164,6 +197,7 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
 
     // Cancel any ongoing speech
     synthRef.current.cancel();
+    // SPEAKING is set by the real 'start' event, not on request.
 
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.0;
@@ -191,6 +225,8 @@ export function useVoice(options?: UseVoiceOptions): UseVoiceReturn {
 
   const stopSpeaking = useCallback(() => {
     synthRef.current?.cancel();
+    const st = useAppStore.getState().voiceState;
+    if (st === 'SPEAKING') setVoiceState('MIC_OFF');
   }, []);
 
   return {

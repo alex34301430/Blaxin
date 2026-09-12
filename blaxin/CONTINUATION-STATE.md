@@ -1,5 +1,459 @@
 # BLAXIN Engineering Mission — Continuation State
 
+## SESSION — LAYERED MEMORY INTEGRATION COMPLETED + TERMINAL VERIFICATION (2026-09-12, PART 7)
+
+Resumed from the Part-6 session. Inspected first (git status/diff,
+CONTINUATION-STATE, memory/layers.ts, memory/advisor.ts, orchestrator):
+NO reset, NO revert. The previous session had built the COMPLETE layered
+memory runtime (`layers.ts`: failure/environment/episode/procedure stores,
+redaction gates, persistence, honest degradation) and the retrieval
+advisor (`advisor.ts`: relevance-gated, budgeted composition), but was cut
+off MID-EDIT — `layers.ts` had a tsc error (input.strategy optional) and
+the orchestrator integration was stubs: imports + a `memoryAdvisorRef`
+getter existed but NOTHING called advise() or recorded outcomes.
+
+### What was PARTIAL — completed and verified this session
+1. **tsc fixed**: `cleanText(input.strategy ?? '', 500)` in EpisodicMemory.record.
+2. **Environment retrieval bug found + fixed (real bug, not test noise)**:
+   keys are stored dash-joined ('browser-page') and tokens() preserves the
+   dash, so multi-word keys could NEVER match an objective
+   ('browser page state' tokens to ['browser','page','state']).
+   relevant() now matches on BOTH the raw key and its de-dashed form.
+3. **Advisor wired into the LLM path**: runTask() calls
+   selectMemoryAdvisory(objective) after task creation (before the loop);
+   the advisory renders into the system prompt via
+   getMemoryAdvisoryContext() (subordination framing supplied by the
+   advisor: memory is BACKGROUND DATA, the current instruction wins).
+   Non-empty advisories emit a real `memory-selected` event (same channel
+   as skills-selected; per-selection layer/id/reason/score + budget chars).
+   Failures degrade to no advisory — memory never breaks a task.
+4. **Learning loop closed (§20+)**: finishRunTask() →
+   recordLayeredMemoryOutcome(): ONE bounded episode per task (objective,
+   honest outcome — a run with failed steps is partial/failure and NOT
+   verified; real tool evidence as strategy; ≤3 real failure lessons),
+   failure records per failed tool step (≤3, real error observations),
+   and an environment observation ONLY when a browser verification
+   payload carries real URL evidence (fresh observations override stale
+   memory; no verified evidence → no record, never invented).
+   Direct path: a FAILED deterministic action records its failure memory
+   BEFORE the rollback erases the attempt (runDirectTask).
+5. **Dead state removed**: directiveMemoryAdvisory (never consumed)
+   deleted; runObservations (per-run verified-evidence map) added and
+   cleared at run start/end.
+6. **Inspectable (§19)**: REST `GET /api/memory/layers` (bounded snapshot),
+   `DELETE /api/memory/layers/:kind/:id`, `DELETE /api/memory/layers`
+   (clear all). index.ts wires setMemoryRuntime(memoryLayers) explicitly.
+7. **Client**: MemoryPage gains a LAYERED MEMORY panel (counts, INSPECT
+   toggle, per-record rows with layer badge/meta/delete — failures with
+   recovery, environment with volatility/confirmations, episodes with
+   outcome/verified, procedures with version/status/success-failure);
+   useWebSocket handles `memory-selected` → `MEMORY:` activity lines.
+8. **Terminal verification-in-depth (§12, next directive item)**: the
+   terminal tool claimed success whenever a command produced stdout —
+   `grep -q`/`test`/`diff` (exit 1, no stderr) were "successes". Now:
+   nonzero exit = FAILURE with real exit code (stdout kept for
+   diagnosis), timeout/signal kill = honest "did not complete" failure;
+   exit 0 reports exitCode 0 in data. data.exitCode is what the
+   orchestrator captures for memory.
+
+### Verification this phase (all evidence, no claims)
+- Server `tsc --noEmit` clean; client `tsc -b` + `vite build` clean.
+- New tests: memory-layers (21: redaction/refusal, contradiction rule §24,
+  recurrence, recovery learning loop, promotion pipeline + reversible
+  rollback, persistence round-trip, corrupt/oversized degradation,
+  advisor selection incl. STALE re-observe marking + hard budget),
+  memory-orchestrator (9: real episode/failure/environment recording,
+  no-observation-without-verification, memory-selected event, advisory
+  reaches the model prompt, throwing-runtime degradation, direct-path
+  failure recorded before rollback), terminal-verification (6: exit-code
+  honesty, timeout kill, real codes, dangerous-pattern gate intact).
+- FULL server suite: **587 passed / 6 skipped / 0 failed** (skips =
+  env-gated real-Chrome/live-LLM). One run showed the documented
+  load-sensitivity flakes (cloud/deployment, multi-body TLS); both pass
+  in isolation and the final full run is green.
+- E2E (real backend + vite + Chrome): **8/8 PASS** (18s).
+- **LIVE smoke (real backend, scratch data dir, port 3199)**: WS probe →
+  safe fast-path task "list the contents of /tmp" → task-complete
+  {kind:direct, modelCalls:0, toolCalls:1} in 10ms →
+  GET /api/memory/layers shows the REAL recorded episode
+  {objective, outcome:success, verified:true, strategy:"Used tools:
+  filesystem", taskId, confidence:0.8, provenance} → memory-layers.json
+  persisted under the data dir. The full loop RUNS in production wiring.
+
+### Honest remaining gaps (documented, not hidden)
+- memory-selected only fires on the LLM path (the direct path has no
+  model prompt to advise — by design; no fabricated advisory lines).
+- Advisor singletons are wired via explicit setMemoryRuntime in index.ts;
+  tests that construct their own orchestrator must inject fakes (done in
+  the new suite).
+- Live-LLM round trip with memory read-back remains environment-blocked
+  (no provider key) — covered deterministically as before.
+
+### NEXT EXACT ACTION (directive priority order)
+- Memory phase is now COMPLETE end to end (write path + read path +
+  inspection + persistence + tests + live evidence). Continue
+  verification-in-depth for the remaining non-browser tools (filesystem
+  writes already verified; clipboard/screenshot are observation-only),
+  then re-audit HUD panels against every new real event source
+  (memory-selected is consumed; verify no panel still renders
+  fabricated data) before the next release cut (v1.4.0 tag).
+
+---
+
+## SESSION — BROWSER-SESSION INTEGRATION COMPLETED + VERIFIED (2026-09-11, PART 6)
+
+Resumed mid-browser-integration from the previous session. Inspected first
+(git status/diff, CONTINUATION-STATE, browser.ts / browser-session.ts /
+cdp-browser.ts / verification.ts / web-agent.ts, agency tests): NO reset, NO
+revert; the completed Skill Runtime work (Part 5) untouched. tsc was clean.
+
+### What the previous session had actually completed
+- `browser-session.ts`: ONE authoritative session (acquire revalidates
+  against real /json targets + real page location; about:blank regression
+  guard §25; bounded strategy-varied recovery §29/§30; real events).
+- `verification.ts`: full tri-state suite (url/title/text/element/playback/
+  state-change) — UNKNOWN never becomes SUCCESS.
+- `web-agent.ts` (blaxin_web): all actions through `browserSession`;
+  open/snapshot/click/type/scroll/youtube_search/youtube_play/verify_playback.
+- `index.ts`: browser-session events broadcast → HUD activity feed.
+- Orchestrator system prompt: WEB AUTOMATION doctrine (grounded actions,
+  snapshot→click, verify_playback, computer-control = LAST RESORT).
+
+### What was PARTIAL — found and fixed this session
+1. **`browser.ts` still had fake-success paths (§68 violations)**:
+   - `open_new_tab` ran `nohup <browser> --new-tab` and returned
+     `success: true` in BOTH branches (even when the launch threw) —
+     fabricated success. Now: `Target.createTarget` through the session +
+     VERIFY the new target appears in the REAL /json page list at the
+     expected URL (5s bounded poll); failure = honest NOT verified.
+   - `close_tab` ran `xdotool key ctrl+w` and claimed "Closed current tab"
+     with zero evidence (which tab? did one close?). Now: close the CURRENT
+     authoritative target via `Target.closeTarget`, `session.release()`
+     (intentional teardown ≠ desync), then VERIFY the target is really gone
+     from the real page list (5s bounded poll).
+   - Every action now gated (`requiresConfirmation` returns true) since all
+     of them manipulate real browser state. Legacy `browser`/`findBrowser`
+     shell probing and the `--new-tab`/xdotool paths are GONE.
+2. **Fresh-acquire failure bypassed the recovery cycle**: a bare
+   `ensureCdpPage` throw produced no events and no bounded retry. Now
+   freshAcquire emits a real `session-desync` and runs the FULL bounded
+   recovery (reconnect/adopt/relaunch) before exhausting with the
+   diagnostic error — first-acquire failures carry the real event trail.
+3. **UNKNOWN verification ended the action silently**: the desync contract
+   requires UNKNOWN → reconnect → reacquire → observe → verify → continue.
+   Added public `BrowserSession.reacquire()`; browser open_url/search on
+   UNKNOWN now forces reacquire + re-verify (4s window) before honestly
+   reporting. A page that becomes observable through recovery yields the
+   REAL answer (test: dead page → relaunch → real URL verified, result
+   carries the SESSION_DESYNC recovered trail).
+4. **Desync/recovery was invisible to the model and the HUD result**: the
+   session emitted events only to the broadcast listener. Added bounded
+   event ring (50, §27) + `recentEvents()` + `desyncNote()`/`withDesyncNote()`:
+   every browser/blaxin_web result that experienced a mid-action desync now
+   carries `[SESSION_DESYNC recovered: …]` (or the loss diagnostic) in its
+   output/error and the raw events in `data.sessionEvents`. No silent recovery.
+5. **Click had no state-transition verification**: blaxin_web click recorded
+   post-click state but verified nothing. Now: when the grounded element has
+   an href, the click's INTENDED transition (the href URL) is verified with
+   real URL evidence; youtube_play verifies the result's watch URL before
+   playback verification (click that didn't navigate = honest FAILURE).
+   Navigation also invalidates the bounded snapshot cache (stale element
+   identity across a page change eliminated).
+6. **blaxin_web guidance existed only as prompt text — the deterministic
+   fast path never used it**: "play X on youtube" fell to the generic LLM
+   loop. Router now deterministically routes `play|watch X on youtube/yt`
+   → `blaxin_web youtube_play`, `search youtube for X` / `search X on
+   youtube` / `find X on youtube` → `blaxin_web youtube_search` (matched
+   BEFORE generic web search; ambiguous fragments stay on the LLM path —
+   no guessing). Confirmation gate unchanged.
+
+### Verification this phase (all evidence, no claims)
+- Server `tsc --noEmit` clean.
+- Focused suites: browser-flow 15 + browser-session 17 + verification 23 +
+  web-agent-honesty 13 + cdp-browser 26 + direct-router 11 = **97/97 PASS**.
+- **REAL-Chrome CDP suite executed on this machine**:
+  `BLAXIN_REAL_CHROME=1 npx vitest run src/__tests__/agency/cdp-real-browser.test.ts`
+  → **5/5 PASS in 4.1s** (launch+attach, ground→click→verify in the real
+  DOM, adaptive scroll to a bottom target, honest no-video playback).
+- FULL server suite: **551 passed / 6 skipped / 0 failed** (skips = env-gated
+  real-Chrome/live-LLM; wss-transport real-TLS passed in-run this time).
+- Engine benchmark: all guard rails PASS (fast path 8.1x vs LLM loop;
+  skill selection 0.345ms median per task start).
+- Test-infra honesty fix: browser-flow `fakeCdp` now reports `errorPage`
+  evidence (chrome-error pages ARE observable — that is what makes them
+  FAILURE, not UNKNOWN); the previous session's version could not express
+  the §68 chrome-error case it was testing.
+
+### Honest remaining gaps (unchanged, documented)
+- Live YouTube end-to-end (network + bot-walls) remains a manual probe, NOT
+  an automated claim — real-Chrome suite uses deterministic data: pages.
+- Live-LLM browser round trip (model driving blaxin_web with a real
+  provider) still environment-blocked; covered deterministically as before.
+
+### ALSO THIS SESSION — MISSION-CONTROL CHECKPOINT REPORTING (next phase started)
+- `AgentReport.missionCheckpoint` (NEW optional block, jarvis/types.ts):
+  missionId, objective, completedSteps/totalSteps, `lastCheckpoint`
+  (stepDescription + completedAt + summary from the mission store's REAL
+  per-step checkpoint records), and an honest `nextAction` string.
+- Engine: terminal mission snapshots (completed/failed/cancelled) AND
+  pause boundaries now extract the checkpoint truth via `extractCheckpoint()`
+  (the LAST checkpointed step in mission order = where resume continues).
+  Null `lastCheckpoint` is honest (no checkpointed steps yet) — never
+  invented. Non-mission reports carry no checkpoint block.
+- Tests (jarvis-engine 22/22): terminal report carries the real last
+  checkpoint (summary/completedAt asserted), zero-checkpoint mission fails
+  with an honest null + "No checkpointed steps yet" nextAction, non-mission
+  reports carry no block. Test gotcha recorded: the makeEngine fake binds
+  the FIRST mission directive to `m_1` — mission-progress payloads must
+  use that id or the engine's real correlation guard correctly ignores them.
+
+### NEXT EXACT ACTION (directive priority order)
+- Memory (§20+): failure-lesson read-back is already wired (formatMemoryContext);
+  evaluate episodic/procedural memory layers per the directive, then
+  environment-memory. After memory: verification-in-depth for non-browser
+  tools (file writes already verified; terminal exit codes next).
+
+---
+
+## SESSION — SKILL RUNTIME COMPLETED + CONNECTED (2026-09-11, PART 5)
+
+Resumed from the skill-runtime integration session. Repository state was
+inspected first (git status/diff, CONTINUATION-STATE, skills/registry.ts,
+orchestrator, tests): no reset, no revert. The previous session had written
+`server/src/skills/registry.ts` (DISCOVER/SELECT/COMPOSE) and orchestrator
+plumbing (skillContext/currentSkills/selectSkillsFor/buildSkillContext wiring
+into the system prompt) but was cut off MID-EDIT: the orchestrator never
+imported the registry (tsc would fail) and `selectSkillsFor` was never called.
+
+### Skill runtime — now COMPLETE + CONNECTED + VERIFIED
+- **Import fixed**: `orchestrator/index.ts` imports `SkillRegistry,
+  SkillSelection, skillRegistry` from `../skills/registry.js`; server tsc
+  was broken before this (verified: clean now).
+- **Connected to task start**: `runTask()` calls `selectSkillsFor(userMessage)`
+  after task/plan creation, BEFORE the loop — selection runs per task against
+  the REAL objective, never a static dump. `finishRunTask()` clears the
+  context so the next task re-selects (no stale skill leakage across tasks;
+  direct-path tasks unaffected — they never enter the loop).
+- **Runtime observability (§58)**: `skills-selected` event emitted on the
+  SAME event channel as every other agent event (id/name/score/reason per
+  selection — reasons are inspectable, no opaque picks); selections bound to
+  `AgentTask.skillsSelected` and pushed via a real `task-progress` so the HUD
+  can show WHAT was selected and WHY. Emitted only when non-empty (no noise).
+- **REAL-LIBRARY GAP FOUND AND FIXED** (the kind of thing fixture-only tests
+  miss): the shipped 39-skill library has NO frontmatter `triggers` — the
+  matcher selected NOTHING for real objectives (fixture tests passed because
+  the fixtures declared triggers). Added a curated, skill-keyed
+  `DOMAIN_KEYWORDS` index (deterministic router layer; frontmatter triggers
+  remain the strongest signal when a library provides them) + threshold
+  retuned 0.25→0.19 (acceptance: above weak lexical noise (1 description
+  word = 0.15), below one precise signal (domain = 0.2, name word = 0.3,
+  trigger = 0.45)). Found via a tsx live probe against the real singleton:
+  "play X on youtube" → computer-use(0.20) [domain (youtube)]; "open the
+  browser and navigate to github" → browser-operator(0.40); "list /tmp" and
+  "order a pizza" → NOTHING (no skill-stuffing). Context budget respected
+  (youtube objective → 1991 chars of 4000).
+- **Client observability**: `useWebSocket` `skills-selected` handler adds a
+  `SKILLS: …` line to the real HUD activity feed (kind 'think';
+  shape-validated).
+- **Tests**: `server/src/__tests__/skills/skill-runtime.test.ts` — 17 tests:
+  discovery, objective-driven selection (different objectives → different
+  skills), ranking/caps, composition bounded by hard budget (small vs large
+  registry), empty-selection = empty context, missing-library degradation,
+  orchestrator integration (skills reach the MODEL system prompt, re-select
+  per task, throwing registry degrades to no skills + task still completes,
+  skills-selected + task-progress observability, no-event-when-none) and
+  REAL-library regression guards (prose-only library still selects;
+  off-domain objectives select nothing).
+
+### Verification this phase (all evidence, no claims)
+- Server `tsc --noEmit` clean; skill suite 17/17; FULL suite **531 passed /
+  6 skipped** on the green run (2 skips = env-gated real-Chrome/live-LLM;
+  the run-local flakes seen once each: `cloud/deployment` and
+  `wss-transport` real-TLS — both pass in isolation and are the documented
+  pre-existing load sensitivities; neither touches this subsystem).
+- Client `tsc -b` + `vite build` clean; E2E **8/8**.
+- Engine benchmark (`npx tsx bench/run-bench.ts`): all guard rails PASS
+  with skill selection in the loop — engine overhead still ≈0.3ms/iteration
+  (skill selection cost is below benchmark resolution).
+- Live probe (real 39-skill registry): selection + budget behavior above.
+
+### Also this session — computer-use REAL verification + benchmark pin
+- **REAL-CHROME CDP suite executed on this machine** (the documented
+  remaining gap): `BLAXIN_REAL_CHROME=1 npx vitest run
+  src/__tests__/agency/cdp-real-browser.test.ts` → **5/5 PASS in 4.9s**
+  (launch+attach, ground→click→verify in the real DOM, adaptive scroll to a
+  bottom target, honest no-video playback). Computer-use grounding/verify
+  layer is now REAL-verified, not just fake-CDP-verified.
+- **Benchmark scenario 7 added** (`bench/run-bench.ts`): skill selection
+  against the REAL 39-skill library per task start (incl. the no-match
+  full-scan worst case) — median **0.302ms**, guard rail 10ms. `fmt()` now
+  truncates run lists >6 (readability). Full bench: all guard rails PASS.
+
+### NEXT EXACT ACTION
+- Computer-use reliability increment (§12–§19) is ALREADY implemented and
+  unit-tested from earlier sessions (`tools/cdp-browser.ts` grounding/scroll/
+  playback-verify, `tools/browser-session.ts` recovery lifecycle,
+  `tools/verification.ts` tri-state, `tools/web-agent.ts` — plus fake-CDP
+  tests under `__tests__/agency/` and the env-gated real-Chrome suite). The
+  honest remaining gap there is the REAL-CHROME run: execute
+  `BLAXIN_REAL_CHROME=1 npx vitest run src/__tests__/agency/cdp-real-browser.test.ts`
+  on a display with real Chrome, then wire `blaxin_web` guidance into the
+  orchestrator's browser flow (skill context now gives the model the
+  grounding/verify doctrine automatically for browser objectives).
+- After that: mission-control checkpoint reporting polish, then memory
+  (§20+) per the directive priority order.
+
+---
+
+## SESSION — SECURITY AUDIT + REAL AGENCY STATUS (2026-09-10, PART 4)
+
+### 1. Ed25519 private-key audit (directive §1–§2) — CLEAN + ROTATED
+- `server/body-identity.json` (dev orphan from a cwd-data-dir probe):
+  **never committed** (git log --all --follow: empty; -S content sweep over
+  all refs for key material: 0 hits), perms were already 0600, no live
+  process held it, no other copy existed (system install has no identity
+  file yet — first pairing will create it).
+- **Rotated**: file deleted (it was unused; next dev run generates a fresh
+  identity — the correct rotation for an orphaned key that was displayed in
+  a session transcript). Not a destructive history rewrite: nothing to
+  rewrite.
+- `.gitignore` hardened: `body-identity.json` / `brain-identity.json` /
+  `*-credentials` / `blaxin-config.json` at ANY depth (was a single
+  `server/` path).
+- **Regression guard** `server/src/__tests__/security/gitignore-secrets.test.ts`:
+  asserts no tracked file matches secret patterns AND the ignore rules
+  actually match probe paths (works whether blaxin/ is repo root or a
+  workspace subdir).
+
+### 2. REAL Agency status (directive §5–§11) — COMPLETE
+- `server/src/agency/registry.ts` (NEW): AgencyRegistry — the agency is the
+  real, observable decomposition of the EXISTING agent's work. Every actual
+  tool execution becomes a WORKER keyed by its REAL runtime step id; role
+  derives from the actual tool (browser→BROWSER, filesystem→FILES, …).
+  Lifecycle driven ONLY by real events: tool-execution (executing/retrying/
+  completed/failed/skipped), confirmation-required (honest WAITING, tool
+  parsed from the gate's real action payload, degrades to unknown on
+  malformed input), agent-state (idle settles actives → cancelled),
+  task-progress/task-complete (task binding), queue-updated (real counts).
+  No-fake guarantees pinned by tests: no worker without a real activation,
+  no guessed correlation without stepId, no invented tools/roles.
+- Orchestrator additions (additive, backward-compatible): `executing` and
+  `retrying` tool-execution events now carry `stepId` (they always had the
+  real id — correlation honesty); `confirmation-required` gains
+  `runtimeStepId` (the real step id) alongside the provider call id in
+  `stepId` (unchanged, used by confirmation-response).
+- `server/src/index.ts`: registry subscribed to the real event hub →
+  `agency-updated` broadcasts; snapshot sent on WS connect; `GET /api/agency`.
+- Client: store types (`WorkerRecord`/`AgencySnapshot` with real ids),
+  `useWebSocket` agency-updated handler (shape-validated — mismatch = no
+  display), HUD `AgencyPanel` (left rail; only real workers; honest empty
+  states: NO DATA / AGENTS STANDBY / NO ACTIVE WORKERS), jarvis.css additions.
+- Tests: `src/__tests__/agency/registry.test.ts` — 15 tests (lifecycle,
+  correlation, honest degradation, cancel-on-stop, bounded memory).
+
+### 3. Test-suite fixes (no logic changes)
+- `wss-transport.test.ts` real-TLS pairing test: explicit 90s per-test
+  budget (two real TLS handshakes under load exceed the 30s global; prior
+  session raised internal waits to 40s but vitest's ceiling was still 30s —
+  now passes in isolation in 2.6s and under load).
+
+### Verification this phase
+- Server tsc clean; suite **444 passed / 1 skipped** (incl. 15 agency +
+  4 security-guard; skip = env-gated live-LLM).
+- Client `tsc -b` + `vite build` clean; E2E **8/8**.
+
+### NEXT EXACT ACTION
+- Computer-use reliability increment (§12–§19): CDP-grounded browser
+  control (real DOM perception, geometry-grounded clicks, adaptive scroll
+  with boundary detection, YouTube search→select→play→verify-playback via
+  real video element state). Design decided: deterministic CDP channel as
+  the cheapest reliable perception layer (§16), xdotool stays the fallback
+  actuator. Unit tests via fake CDP server; real-Chrome test env-gated.
+
+---
+
+## SESSION — BLAXIN→JARVIS TRANSFORMATION, PART 3: FRONTEND BLOCKERS FIXED + VERIFIED (2026-09-10)
+
+Session resumed from a timeout mid-TypeScript-verification. Repository state
+reconstructed first (§1–§4 of the resume directive): no reset, no rebuild, no
+revert. Both known blockers fixed at root cause, then the full verification
+ladder run green.
+
+### Blocker 1 — ChatPanel.tsx TS2448/TS2454 (`stopSpeaking` used before declaration) — FIXED
+- **Root cause**: the `onFinalTranscript` callback was passed INTO the
+  `useVoice(...)` call but lexically referenced `stopSpeaking`, which only
+  exists in the destructured RETURN of that same call — a genuine
+  declaration-order cycle, not a scoping quirk. It was also in the
+  useCallback deps array, which is evaluated immediately.
+- **Fix**: (a) `useVoice` now mirrors `options.onTranscript`/
+  `options.onFinalTranscript` into latest-refs and the recognition handlers
+  (installed once on mount) invoke the CURRENT callback — this also removed a
+  latent stale-closure bug where the mount-time callback was captured forever;
+  (b) ChatPanel's callback now reads mutable state through refs
+  (`agentStateRef`, `sendMessageRef`) instead of depending on hook returns,
+  so it sits cleanly BEFORE the `useVoice` call with stable deps
+  (`[setVoiceState]`); (c) the `stopSpeaking()` call inside the voice-submit
+  path was removed as unnecessary: `useVoice.startListening()` now performs
+  REAL barge-in (cancels ongoing TTS at the source before the mic opens), so
+  speech has already stopped by the time a voice command is submitted. Text
+  sends still interrupt speech via `handleSend`. TTS interruption behavior is
+  preserved (and now also covers mic-open), no circular hook deps, no stale
+  closures (verified by construction: all cross-hook reads go through refs
+  refreshed every render).
+
+### Blocker 2 — JarvisPanel.tsx TS2339 (`step.id` does not exist) — FIXED
+- **Root cause**: the RUNTIME genuinely produces stable step ids — server
+  `TaskStep.id` (orchestrator) and mission step ids flow into the engine's
+  `ReportStep { id, ... }`, which is what gets serialized into the
+  `jarvis-state` snapshot. Only the two DECLARED wire/store types omitted the
+  field. So the correct fix was widening the type (option 1 of the directive),
+  NOT inventing client-side display ids.
+- **Fix**: `ReportStep` is now defined once in `server/src/jarvis/types.ts`
+  (single source of truth) and re-exported by `engine.ts`; the client
+  `store.ts` `AgentReport.evidence` type gained `id: string`. JarvisPanel
+  keys evidence rows on the real runtime step id. No fabricated identity.
+
+### Also fixed this session
+- `blaxin/server/body-identity.json` (runtime Ed25519 identity + PRIVATE key,
+  created by an earlier live probe whose server ran with the cwd-relative
+  data-dir fallback) was sitting untracked in the source tree. NOT deleted
+  (a live instance may own it); added `server/body-identity.json` to
+  `blaxin/.gitignore` so key material can never be committed.
+
+### Verification (all green, this session)
+- Client: `npx tsc -b` clean; `npx vite build` clean (3.9s).
+- Server: `npx tsc --noEmit` clean; jarvis suite 29/29; FULL suite
+  **425 passed / 1 skipped** (the skip is the environment-gated live-LLM
+  brain test) — no regressions from the type widening.
+- E2E (real backend + vite + Chrome): **8/8 passed** (18.4s), including the
+  HUD verify (6 panels + ticker + real /status round-trip) and the audio
+  mute/volume persistence test that exercises the modified ChatPanel.
+- Voice (verified by construction + typecheck; physical audio remains
+  environment-blocked as documented in earlier phases): voice→submit path
+  unchanged (same BLAXIN pipeline as text), no duplicate speech (auto-speak
+  effect untouched), barge-in real, voice states flow through the same
+  VoiceState machine.
+- Architecture unchanged: JARVIS → existing BLAXIN agent → agency → tools →
+  real computer. Jarvis still delegates only; HUD shows only real snapshot
+  fields; empty states render NO ACTIVE DIRECTIVE.
+
+### Working tree (uncommitted, deliberate — see NEXT STEPS)
+- Modified: `.gitignore`, client `ChatPanel.tsx` `HudView.tsx` `useVoice.ts`
+  `useWebSocket.ts` `jarvis.css` `store.ts`, server `index.ts`
+  `orchestrator/index.ts` `types.ts` `scheduler.ts` `task-queue.ts`.
+- New: `client/src/components/hud/JarvisPanel.tsx`, `server/src/jarvis/`
+  (engine/host/intent/types), `server/src/__tests__/jarvis/` (29 tests).
+
+### NEXT EXACT ACTION
+1. Commit the working tree (logically grouped: jarvis backend, HUD frontend,
+   voice fixes, gitignore) and push to main.
+2. Then continue with the remaining roadmap items from Part 1/2: agency
+   status surfacing in the HUD (only real worker states), and the
+   computer-use reliability work (YouTube search/play/verify, click/scroll
+   targeting) — NOT claimed solved until actually tested.
+
+---
+
 ## SESSION — BLAXIN→JARVIS TRANSFORMATION (2026-09-09, PART 1: BACKEND COMPLETE)
 
 ### Directive

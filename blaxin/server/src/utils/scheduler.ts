@@ -23,6 +23,8 @@ export interface SchedulerOrchestratorLike {
   processMessage(message: string): Promise<void>;
   stop(): void;
   clearHistory(): void;
+  /** Optional Jarvis directive context for the task about to run. */
+  setDirectiveContext?(directive: unknown | null): void;
 }
 
 export interface SchedulerDeps {
@@ -154,6 +156,10 @@ export class JarvisScheduler {
     this.lastState = 'planning';
     this.emit('scheduler', { runningTaskId: next.id });
     logger.info('scheduler', `Running queue task ${next.id}: ${next.objective.slice(0, 80)}`);
+    // Attach the directive context that traveled with THIS queue task
+    // (or null — a mission step / plain enqueue never inherits a stale
+    // directive from an earlier task).
+    this.orchestrator.setDirectiveContext?.(next.directive ?? null);
     this.orchestrator.processMessage(next.objective).catch((error: any) => {
       logger.error('scheduler', `Queue task ${next.id} failed to start: ${error.message}`);
     });

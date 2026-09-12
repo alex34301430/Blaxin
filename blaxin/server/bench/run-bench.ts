@@ -22,6 +22,7 @@ import { FakeProviderRegistry, FakeToolRegistry, FakeSession, FakeMemory, makeCo
 import { FakeProvider } from '../src/__tests__/helpers/orchestrator-fakes.js';
 import { logger } from '../src/utils/logger.js';
 import { telemetry, TaskMetrics } from '../src/utils/telemetry.js';
+import { skillRegistry } from '../src/skills/registry.js';
 
 const MODEL_LATENCY_MS = 250;
 const TOOL_LATENCY_MS = 120;
@@ -140,8 +141,43 @@ async function collect(label: string, fn: (mode: boolean) => Promise<number>, mo
   };
 }
 
+/**
+ * Scenario 7 — Skill selection (§13–§15, once per task start): the REAL
+ * registry singleton selects + composes against representative objectives
+ * (browser, memory, verification, recovery domains). Runs 100 iterations
+ * and reports the median per-task cost.
+ */
+async function collectSkillSelect(): Promise<ScenarioResult> {
+  skillRegistry.discover();
+  const objectives = [
+    'open the browser and navigate to github and check the repo',
+    'remember that the deploy key rotates monthly',
+    'take a screenshot of the desktop and verify the layout',
+    'recover from the popup and retry the modal interaction',
+    'list the contents of /tmp', // worst case: no match, full scan
+  ];
+  const selectOnce = (): void => {
+    for (const o of objectives) skillRegistry.buildSkillContext(o);
+  };
+  for (let i = 0; i < 10; i++) selectOnce(); // warmup
+  const runs: number[] = [];
+  for (let i = 0; i < 100; i++) {
+    const start = performance.now();
+    selectOnce();
+    runs.push((performance.now() - start) / objectives.length);
+  }
+  return {
+    label: '7. Skill selection (per task start, real library)',
+    runs,
+    medianMs: Math.round(median(runs) * 1000) / 1000,
+    minMs: Math.round(Math.min(...runs) * 1000) / 1000,
+    metrics: undefined,
+  };
+}
+
 function fmt(result: ScenarioResult): string {
-  const spread = result.runs.map((r) => `${r}ms`).join(', ');
+  const shown = result.runs.length > 6 ? result.runs.slice(0, 5).map((r) => `${r}ms`).concat(['…']) : result.runs.map((r) => `${r}ms`);
+  const spread = shown.join(', ');
   const m = result.metrics;
   const share = m && m.modelMs > 0
     ? `  (model ${m.modelMs}ms = ${Math.round((m.modelMs / (m.totalMs || 1)) * 100)}% of task time)`
@@ -163,6 +199,7 @@ async function main(): Promise<void> {
   const serialBatch = await collect('4. 3 reads — serial (parallel off)', runBatch, false);
   const engineOverhead = await collect('5. Engine overhead (3 waves, 0 latency)', async () => runEngineOverhead(false), true);
   const bigPayload = await collect('6. Engine w/ 100KB tool outputs (3 waves)', async () => runEngineOverhead(true), true);
+  const skillSelect = await collectSkillSelect();
 
   console.log(fmt(directPath));
   console.log(fmt(llmPath));
@@ -170,6 +207,7 @@ async function main(): Promise<void> {
   console.log(fmt(serialBatch));
   console.log(fmt(engineOverhead));
   console.log(fmt(bigPayload));
+  console.log(fmt(skillSelect));
 
   const perWaveMs = engineOverhead.medianMs / 4; // 4 loop iterations (3 tool waves + final answer)
   const bigPerWaveMs = bigPayload.medianMs / 4;
@@ -195,6 +233,12 @@ async function main(): Promise<void> {
   }
   if (bigPerWaveMs >= 25) {
     failures.push(`engine overhead too high with large payloads (${bigPayload.medianMs}ms for 3 zero-latency waves, ${bigPerWaveMs.toFixed(1)}ms/iteration)`);
+  }
+  // Skill runtime (§13–§15): selection runs ONCE per task start against
+  // the real objective. It must stay far below a single model call —
+  // 10ms median over the full real library is already generous.
+  if (skillSelect.medianMs >= 10) {
+    failures.push(`skill selection too slow (${skillSelect.medianMs}ms per task start)`);
   }
   if (failures.length > 0) {
     console.error('\nBENCHMARK FAILED: ' + failures.join('; '));

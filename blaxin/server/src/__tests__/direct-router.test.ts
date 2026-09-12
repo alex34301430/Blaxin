@@ -67,6 +67,28 @@ describe('fast-path router: direct actions', () => {
     expect(classifyDirect('search for best pizza')).toMatchObject({ tool: 'search' });
     expect(classifyDirect('google weather today')).toMatchObject({ tool: 'search' });
   });
+
+  it('routes YouTube playback/search deterministically to the grounded blaxin_web tool', () => {
+    expect(classifyDirect('play never gonna give you up on youtube')).toMatchObject({
+      tool: 'blaxin_web',
+      args: { action: 'youtube_play', query: 'never gonna give you up' },
+    });
+    expect(classifyDirect('watch lofi beats on yt')).toMatchObject({
+      tool: 'blaxin_web',
+      args: { action: 'youtube_play', query: 'lofi beats' },
+    });
+    expect(classifyDirect('search youtube for blaxin demo')).toMatchObject({
+      tool: 'blaxin_web',
+      args: { action: 'youtube_search', query: 'blaxin demo' },
+    });
+    expect(classifyDirect('find me a tutorial on youtube')).toMatchObject({
+      tool: 'blaxin_web',
+      args: { action: 'youtube_search', query: 'a tutorial' },
+    });
+    // Ambiguous fragments stay on the LLM path — never guessed.
+    expect(classifyDirect('play')).toBeNull();
+    expect(classifyDirect('play something')).toBeNull();
+  });
 });
 
 describe('fast-path router: refusal to guess', () => {

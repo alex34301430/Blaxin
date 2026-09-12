@@ -6,6 +6,7 @@ import { FileSystemTool } from './filesystem.js';
 import { ScreenshotTool } from './screenshot.js';
 import { ComputerControlTool } from './computer-control.js';
 import { BrowserTool } from './browser.js';
+import { WebAgentTool } from './web-agent.js';
 import { ClipboardTool } from './clipboard.js';
 import { SearchTool } from './search.js';
 import { SystemInfoTool } from './system-info.js';
@@ -21,6 +22,7 @@ export class ToolRegistry {
     this.register(new ScreenshotTool());
     this.register(new ComputerControlTool());
     this.register(new BrowserTool());
+    this.register(new WebAgentTool());
     this.register(new ClipboardTool());
     this.register(new SearchTool());
     this.register(new SystemInfoTool());
@@ -127,6 +129,7 @@ const RISK_TIERS: Record<string, RiskTier> = {
   clipboard: 'LOW',
   screenshot: 'MEDIUM', // captures the screen (privacy)
   browser: 'MEDIUM',
+  blaxin_web: 'MEDIUM',
   filesystem: 'MEDIUM',
   terminal: 'MEDIUM',
   'computer-control': 'MEDIUM',

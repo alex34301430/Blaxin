@@ -253,6 +253,100 @@ export function useWebSocket() {
               }
               break;
 
+            case 'jarvis-state':
+              // The Jarvis engine's real phase/directive/report snapshot.
+              if (data && typeof data.phase === 'string') {
+                useAppStore.getState().setJarvisSnapshot(data);
+                // Real routing/report transitions belong in the feed.
+                if (data.lastReport && data.phase === 'idle') {
+                  const r = data.lastReport;
+                  useAppStore.getState().addActivityLine({
+                    id: nextActivityId(),
+                    time: Date.now(),
+                    kind: r.status === 'SUCCESS' ? 'reply' : 'error',
+                    text: `JARVIS REPORT: ${r.status}${r.blockers?.length ? ` — ${r.blockers[0]}` : ''}`,
+                  });
+                }
+              }
+              break;
+
+            case 'agency-updated':
+              // Real worker activations of the running agent. Fields are
+              // validated before display — nothing is shown on a shape
+              // mismatch (no fabricated roster).
+              if (
+                data &&
+                typeof data.agentState === 'string' &&
+                Array.isArray(data.workers) &&
+                typeof data.activeCount === 'number'
+              ) {
+                useAppStore.getState().setAgencySnapshot(data);
+              }
+              break;
+
+            case 'skills-selected':
+              // Skill runtime (§14/§58): which skills the orchestrator
+              // selected for THIS objective, with real match reasons.
+              if (data && Array.isArray(data.skills) && data.skills.length > 0) {
+                const names = data.skills
+                  .map((s: { name?: string }) => String(s.name || '?'))
+                  .join(', ');
+                useAppStore.getState().addActivityLine({
+                  id: nextActivityId(),
+                  time: Date.now(),
+                  kind: 'think',
+                  text: `SKILLS: ${names}`.slice(0, 200),
+                });
+              }
+              break;
+
+            case 'memory-selected':
+              // Layered memory (§20+/§58): WHICH memories were selected
+              // for THIS objective and WHY — inspectable, never opaque.
+              if (data && Array.isArray(data.selections) && data.selections.length > 0) {
+                const layers = data.selections
+                  .map((s: { layer?: string; reason?: string }) =>
+                    `${String(s.layer || '?')}(${String(s.reason || '').slice(0, 40)})`)
+                  .slice(0, 4)
+                  .join(', ');
+                useAppStore.getState().addActivityLine({
+                  id: nextActivityId(),
+                  time: Date.now(),
+                  kind: 'think',
+                  text: `MEMORY: ${layers}`.slice(0, 200),
+                });
+              }
+              break;
+
+            case 'jarvis-event':
+              // Real Jarvis routing decisions (directive issued).
+              if (data?.kind === 'directive-issued') {
+                useAppStore.getState().addActivityLine({
+                  id: nextActivityId(),
+                  time: Date.now(),
+                  kind: 'state',
+                  text: `JARVIS → AGENT (${String(data.complexity).toUpperCase()}/${String(data.reason)}) ${String(data.goal || '')}`.slice(0, 200),
+                });
+              }
+              break;
+
+            case 'browser-session':
+              // REAL browser-session lifecycle (§22/§23): desyncs and
+              // recoveries surface in the activity feed — the HUD shows
+              // the true connection state, never a fabricated browser.
+              {
+                const ev = data?.event;
+                if (ev && typeof ev.type === 'string' && typeof ev.detail === 'string') {
+                  useAppStore.getState().addActivityLine({
+                    id: nextActivityId(),
+                    time: Date.now(),
+                    kind: ev.type === 'session-lost' ? 'error' : 'state',
+                    text: `BROWSER ${String(ev.type).toUpperCase()}: ${ev.detail}`.slice(0, 200),
+                  });
+                }
+              }
+              break;
+
             case 'provider-status':
             case 'pong':
             case 'ready':

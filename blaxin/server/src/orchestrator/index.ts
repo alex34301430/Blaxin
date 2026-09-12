@@ -10,14 +10,22 @@ import { permissionKey, PermissionGrants } from '../utils/permission.js';
 import { logger } from '../utils/logger.js';
 import { getConfig, matchesAnyPattern } from '../utils/config.js';
 import { sessionState } from '../utils/session-state.js';
-import { memoryStore, MemoryType, MemoryEntry, formatMemoryContext } from '../utils/memory.js';
+import { memoryStore, MemoryType, MemoryEntry, formatMemoryContext, looksSensitive } from '../utils/memory.js';
+import { memoryAdvisor, MemoryAdvisory, MemorySelection } from '../memory/advisor.js';
+import { memoryLayers, EnvironmentInput, FailureInput, EpisodeInput, ProcedureInput } from '../memory/layers.js';
 import { classifyDirect, DirectAction } from '../router/direct.js';
 import {
   budgetToolResultOutput, budgetAssistantMessage,
 } from '../utils/context-budget.js';
 import { telemetry, TaskMetrics } from '../utils/telemetry.js';
+import { SkillRegistry, SkillSelection, skillRegistry } from '../skills/registry.js';
 
 type EventCallback = (event: string, data: any) => void;
+
+/** Local helper: steps that actually failed (failed = executed + errored). */
+function failedStepsOf(steps: TaskStep[]): TaskStep[] {
+  return steps.filter((s) => s.state === 'failed');
+}
 
 // ── Injectable Dependencies ─────────────────────────────────────
 // The orchestrator talks to providers, tools, session state and memory
@@ -62,6 +70,13 @@ export interface MemoryStoreLike {
   add(type: MemoryType, content: string, options?: { source?: 'user' | 'agent' | 'system'; scope?: string }): unknown;
   /** Read entries back so durable memory can inform future tasks. */
   search?(query?: string): MemoryEntry[];
+  /**
+   * Relevance-gated memory advisory (memory phase): returns ONLY
+   * task-relevant memory under a hard budget. Optional for backward
+   * compatibility — when absent, the orchestrator falls back to the
+   * legacy full-render path.
+   */
+  advise?(objective: string, opts?: { budgetChars?: number }): MemoryAdvisory;
 }
 
 export interface OrchestratorDeps {
@@ -70,6 +85,24 @@ export interface OrchestratorDeps {
   sessionState: SessionStateLike;
   memoryStore: MemoryStoreLike;
   getConfig: () => AppConfig;
+  /** Skill runtime (§13–§15). Defaults to the real filesystem registry. */
+  skillRegistry?: SkillRegistry;
+}
+
+/**
+ * Layered memory runtime (§20+): persistent failure/environment/episode/
+ * procedure stores the agent WRITES real outcomes to and the advisor
+ * READS task-relevant slices from. Injectable so tests use temp files.
+ */
+export interface MemoryRuntimeLike {
+  failure(input: FailureInput): unknown;
+  observeEnvironment(input: EnvironmentInput): unknown;
+  recordEpisode(input: EpisodeInput): unknown;
+}
+
+/** Structural slice of MemoryAdvisor the orchestrator depends on. */
+export interface MemoryAdvisorLike {
+  advise(objective: string, opts?: { budgetChars?: number }): MemoryAdvisory;
 }
 
 export const SYSTEM_PROMPT = `You are BLAXIN, an advanced AI desktop agent running on Linux. You can control the computer, execute terminal commands, manage files, browse the web, and complete complex multi-step tasks.
@@ -131,9 +164,34 @@ When using tools:
 5. Decide the next step based on the result
 6. Verify the outcome before moving on
 
+WEB AUTOMATION — use grounded actions inside the browser:
+- For anything INSIDE a web page (click a button/link, fill a search box,
+  scroll to an element, play a video), prefer the blaxin_web tool. It
+  grounds targets in the REAL page DOM (role/text/aria + geometry) instead
+  of blind screen coordinates, and reports honest verification evidence.
+- blaxin_web flow: action=open the page → action=snapshot to list real
+  interactive elements → action=click / action=type with a SEMANTIC target
+  description (e.g. "Search" button) → verify the result (for YouTube:
+  action=verify_playback reports the real video element state).
+- If a grounded match is refused, re-run action=snapshot — the page
+  changed; never guess coordinates over DOM evidence.
+- Use the legacy browser tool ONLY to launch a site for the USER to see
+  (open_url/search); it cannot observe or verify page state.
+- Screen-coordinate clicking (computer-control) inside the browser is a
+  LAST RESORT, only when blaxin_web genuinely cannot ground the target.
+
 Always provide a clear final answer when the task is complete.`;
 
 // ── Execution State ─────────────────────────────────────────────
+
+/** Structured directive context from the Jarvis layer (optional). */
+export interface DirectiveContext {
+  id: string;
+  complexity: string;
+  reason: string;
+  successCondition?: string;
+  source: string;
+}
 
 interface ExecutionStep {
   id: string;
@@ -217,6 +275,17 @@ export class AgentOrchestrator {
   private loopAbortReason: string | null = null;
   private readonly MAX_REPEATED_ACTIONS = 3;
 
+  /** Rendered directive context for the current run ('' = none). */
+  private directiveContext = '';
+  /** Advisory selected for the CURRENT task (cleared after each run). */
+  private currentMemoryAdvisory: MemoryAdvisory | null = null;
+  /** Verified evidence observed during the CURRENT run (per step id). */
+  private runObservations = new Map<string, { url?: string; title?: string; exitCode?: number }>();
+
+  /** Skills selected for the CURRENT task (§13–§15) — '' = none matched. */
+  private skillContext = '';
+  private currentSkills: SkillSelection[] = [];
+
   // ── Per-run performance bookkeeping ──────────────────────────
   private runMetrics: {
     startedAt: number;
@@ -230,12 +299,98 @@ export class AgentOrchestrator {
   } | null = null;
 
   constructor(private readonly deps: Partial<OrchestratorDeps> = {}) {
+    // Skill runtime: discover the real library once at construction (§13).
+    try {
+      this.getSkillRegistry().discover();
+    } catch (e: any) {
+      logger.warn('orchestrator', `Skill discovery failed: ${e?.message ?? e}`);
+    }
     // Restore conversation history from persisted state
     const savedHistory = this.session.getHistory();
     if (savedHistory.length > 0) {
       this.conversationHistory = savedHistory as ChatMessage[];
       logger.info('orchestrator', `Restored ${savedHistory.length} messages from session state`);
     }
+  }
+
+  private getSkillRegistry(): SkillRegistry {
+    return this.deps.skillRegistry ?? skillRegistry;
+  }
+
+  /** The layered-memory advisor (injectable for tests; real singleton default). */
+  private memoryAdvisorOverride: MemoryAdvisorLike | null = null;
+  private get memoryAdvisorRef(): MemoryAdvisorLike {
+    return this.memoryAdvisorOverride ?? memoryAdvisor;
+  }
+
+  /** Inject a memory advisor (tests; pass null to restore the real one). */
+  setMemoryAdvisor(advisor: MemoryAdvisorLike | null): void {
+    this.memoryAdvisorOverride = advisor;
+  }
+
+  /** The layered-memory runtime (injectable for tests; real singleton default). */
+  private memoryRuntime: MemoryRuntimeLike | null = memoryLayers;
+
+  /**
+   * Inject a layered-memory runtime (production wiring + tests).
+   * Pass null to run without layered memory (unit-test isolation).
+   */
+  setMemoryRuntime(runtime: MemoryRuntimeLike | null): void {
+    this.memoryRuntime = runtime;
+  }
+
+  /**
+   * SELECT + COMPOSE skills for this objective (§14): only relevant
+   * skills enter the context, under the registry's hard budget.
+   */
+  private selectSkillsFor(objective: string): void {
+    this.skillContext = '';
+    this.currentSkills = [];
+    try {
+      const { context, selected } = this.getSkillRegistry().buildSkillContext(objective);
+      this.skillContext = context;
+      this.currentSkills = selected;
+      if (selected.length > 0) {
+        logger.info('orchestrator', `Skills selected for task: ${selected.map((s) => s.skill.id).join(', ')}`);
+        // Observability (§58): real selections travel on the same event
+        // channel as every other agent event (HUD activity feed).
+        this.eventCallback?.('skills-selected', {
+          skills: selected.map((s) => ({ id: s.skill.id, name: s.skill.name, score: s.score, reason: s.reason })),
+        });
+      }
+    } catch (e: any) {
+      // Skill failure must NEVER break the task — degrade to no skills.
+      this.skillContext = '';
+      this.currentSkills = [];
+      logger.warn('orchestrator', `Skill selection failed: ${e?.message ?? e}`);
+    }
+  }
+
+  /**
+   * SELECT task-relevant memory for THIS objective (§20+): the advisor
+   * composes preferences + relevant failures/environment/procedures/
+   * episodes under a hard budget. Failures degrade to no advisory —
+   * memory must never break a task.
+   */
+  private selectMemoryAdvisory(objective: string): void {
+    this.currentMemoryAdvisory = null;
+    try {
+      const advisory = this.memoryAdvisorRef.advise(objective);
+      if (advisory.text) this.currentMemoryAdvisory = advisory;
+    } catch (e: any) {
+      this.currentMemoryAdvisory = null;
+      logger.warn('orchestrator', `Memory advisory failed: ${e?.message ?? e}`);
+    }
+  }
+
+  /** Real skill selections of the current task (observability, §58). */
+  getCurrentSkills(): SkillSelection[] {
+    return this.currentSkills;
+  }
+
+  /** Real memory selections of the current task (observability, §58). */
+  getCurrentMemorySelections(): MemorySelection[] {
+    return this.currentMemoryAdvisory?.selections ?? [];
   }
 
   // Dependency accessors (defaults to the production singletons).
@@ -440,6 +595,36 @@ export class AgentOrchestrator {
     this.stopRequested = false;
     this.setState('planning', 'Planning the approach...');
     this.stepCount = 0;
+    this.runObservations.clear();
+
+    // Layered-memory advisory (§20+): ONLY task-relevant memory under a
+    // hard budget enters the context — preferences always, everything
+    // else on real relevance. Failures degrade to no advisory.
+    this.selectMemoryAdvisory(userMessage);
+    if (this.currentMemoryAdvisory && this.currentMemoryAdvisory.selections.length > 0) {
+      // Real observability: WHICH memories were selected and WHY, on the
+      // same event channel as every other agent event (HUD activity feed).
+      this.emit('memory-selected', {
+        selections: this.currentMemoryAdvisory.selections.slice(0, 10),
+        chars: this.currentMemoryAdvisory.chars,
+      });
+    }
+
+    // Skill runtime (§13–§15): SELECT + COMPOSE skills for THIS objective.
+    // Never a static dump — selection runs per task against the real
+    // objective, and failures degrade to no skills (the task proceeds).
+    this.selectSkillsFor(userMessage);
+    if (this.currentSkills.length > 0 && this.currentTask) {
+      // Bind the real selections to the task + push one real task-progress
+      // so the HUD can show WHICH skills were selected (and why) up front.
+      this.currentTask.skillsSelected = this.currentSkills.map((s) => ({
+        id: s.skill.id,
+        name: s.skill.name,
+        score: s.score,
+        reason: s.reason,
+      }));
+      this.emit('task-progress', { ...this.currentTask, steps: [...this.currentTask.steps] });
+    }
 
     try {
       await this.executeLoop(provider, modelId, config.agent.maxSteps, providerId);
@@ -462,6 +647,10 @@ export class AgentOrchestrator {
    * (Secrets are never stored.)
    */
   private finishRunTask(): void {
+    // Skill context is scoped to ONE task — cleared after the run so the
+    // next task (or queued message) re-selects against ITS objective.
+    this.skillContext = '';
+    this.currentSkills = [];
     if (this.currentTask) {
       this.currentTask.endTime = Date.now();
       if (this.currentTask.state === 'thinking' || this.currentTask.state === 'planning' || this.currentTask.state === 'executing') {
@@ -491,7 +680,82 @@ export class AgentOrchestrator {
       });
     }
 
+    this.recordLayeredMemoryOutcome(userMessage, taskSteps);
+    this.currentMemoryAdvisory = null;
+    this.runObservations.clear();
+
     this.recordMetrics();
+  }
+
+  /**
+   * Close the learning loop (§20+): write the REAL run outcome to the
+   * layered-memory stores so the advisor can surface it to future tasks.
+   * Only verified evidence and settled step states are recorded — no
+   * invented successes. Secret-like content is refused by the layers.
+   */
+  private recordLayeredMemoryOutcome(userMessage: string, taskSteps: TaskStep[]): void {
+    if (!this.memoryRuntime) return;
+    const taskId = this.currentTask?.id;
+    const outcome = this.runMetrics?.outcome;
+    try {
+      // EPISODE: one bounded record per task (objective, outcome,
+      // verified strategy, lessons from real step evidence). A run that
+      // finished with failed steps is NOT a success — honest partial/fail.
+      const completed = taskSteps.filter((s) => s.state === 'completed');
+      const hasFailures = failedStepsOf(taskSteps).length > 0;
+      const runCompleted = outcome === 'completed' || outcome === 'step-limit';
+      if (userMessage && (completed.length > 0 || hasFailures || outcome === 'stopped')) {
+        const lessons = failedStepsOf(taskSteps)
+          .slice(0, 3)
+          .map((s) => `${s.description} failed: ${(s.error || 'unknown error').slice(0, 120)}`);
+        const strategy = completed.length > 0
+          ? `Used tools: ${[...new Set(completed.map((s) => s.toolName).filter(Boolean))].slice(0, 6).join(', ')}`
+          : '';
+        this.memoryRuntime.recordEpisode({
+          objective: userMessage,
+          outcome: hasFailures
+            ? (completed.length > 0 ? 'partial' : 'failure')
+            : runCompleted ? 'success' : 'partial',
+          strategy,
+          lessons,
+          // A run with failed steps is not a clean success — only fully
+          // completed runs without failures count as verified evidence.
+          verified: runCompleted && !hasFailures,
+          taskId,
+          source: 'agent',
+          ref: taskId,
+        });
+      }
+
+      // FAILURE records: one per failed tool step (capped), with the
+      // real error observation so future tasks can recognize the pattern.
+      for (const step of failedStepsOf(taskSteps).slice(0, 3)) {
+        this.memoryRuntime.failure({
+          category: step.toolName || 'task',
+          failedAction: step.description,
+          observation: (step.error || 'unknown error').slice(0, 300),
+          taskId,
+          source: 'agent',
+          ref: step.id,
+        });
+      }
+
+      // ENVIRONMENT: record VERIFIED browser location after navigation —
+      // fresh observations override stale memory (§24).
+      const verifiedUrl = [...this.runObservations.values()].find((o) => o.url);
+      if (verifiedUrl?.url) {
+        this.memoryRuntime.observeEnvironment({
+          key: 'browser last verified page',
+          value: verifiedUrl.url,
+          volatility: 'volatile',
+          source: 'agent',
+          ref: taskId,
+        });
+      }
+    } catch (e: any) {
+      // Memory failures must NEVER take the agent down (§20 safety rule).
+      logger.warn('orchestrator', `Layered memory recording failed: ${e?.message ?? e}`);
+    }
   }
 
   private recordMetrics(): void {
@@ -586,6 +850,7 @@ export class AgentOrchestrator {
     this.lastActionFingerprint = '';
     this.loopAbortReason = null;
     this.stopRequested = false;
+    this.runObservations.clear();
     this.setState('executing', action.summary);
 
     const toolCall: ToolCall = {
@@ -626,6 +891,21 @@ export class AgentOrchestrator {
 
     const result = await this.runTool(pc);
     if (!result.success) {
+      // Failure memory (§20+): a failed deterministic action IS the real
+      // signal — record it before the rollback erases the attempt so the
+      // learning loop can recognize the pattern next time.
+      try {
+        this.memoryRuntime?.failure({
+          category: action.tool,
+          failedAction: pc.step.description,
+          observation: (result.error || 'unknown error').slice(0, 300),
+          taskId: this.currentTask?.id,
+          source: 'agent',
+          ref: pc.step.id,
+        });
+      } catch (e: any) {
+        logger.warn('orchestrator', `Layered memory recording failed: ${e?.message ?? e}`);
+      }
       // Failed deterministic action: roll back this attempt entirely and
       // let the LLM loop diagnose/recover (it may explain or adapt).
       this.rollbackDirect(historyMark);
@@ -849,6 +1129,28 @@ export class AgentOrchestrator {
     if (this.runMetrics) this.runMetrics.outcome = 'step-limit';
   }
 
+  /**
+   * Set the Jarvis directive context for the NEXT task run (called by
+   * the scheduler with the context carried on the queue task; null
+   * clears it). Rendered into the system prompt so the agent executes
+   * against the structured goal, not just raw text.
+   */
+  setDirectiveContext(directive: DirectiveContext | null): void {
+    if (!directive) {
+      this.directiveContext = '';
+      return;
+    }
+    const lines = [
+      `JARVIS DIRECTIVE (${directive.id}):`,
+      `- Execution route: ${directive.complexity} (${directive.reason})`,
+      `- Source: ${directive.source} command`,
+    ];
+    if (directive.successCondition) {
+      lines.push(`- Success condition (verify before reporting success): ${directive.successCondition}`);
+    }
+    this.directiveContext = `\n\n${lines.join('\n')}`;
+  }
+
   private buildMessages(): ChatMessage[] {
     // Improved context management: keep more context for recent messages,
     // less for older ones. Include task plan if available.
@@ -859,7 +1161,7 @@ export class AgentOrchestrator {
       {
         id: 'system',
         role: 'system',
-        content: SYSTEM_PROMPT + this.getTaskContext() + this.getDurableMemoryContext(),
+        content: SYSTEM_PROMPT + this.directiveContext + this.skillContext + this.getTaskContext() + this.getDurableMemoryContext() + this.getMemoryAdvisoryContext(),
         timestamp: Date.now(),
       },
       ...recentHistory,
@@ -882,6 +1184,16 @@ export class AgentOrchestrator {
       logger.warn('orchestrator', `Failed to read memory context: ${error.message}`);
       return '';
     }
+  }
+
+  /**
+   * Layered-memory advisory (§20+): the relevance-gated slice selected
+   * for the CURRENT task at task start. Rendered with explicit
+   * subordination framing (the advisor supplies it) so memory can never
+   * outrank the user's current instruction. '' when nothing matched.
+   */
+  private getMemoryAdvisoryContext(): string {
+    return this.currentMemoryAdvisory?.text ?? '';
   }
 
   private getTaskContext(): string {
@@ -1115,7 +1427,11 @@ export class AgentOrchestrator {
     const actionJson = JSON.stringify({ tool: toolName, args: pc.args });
     this.emit('confirmation-required', {
       taskId: this.currentTask?.id,
+      // stepId is the provider call id (used by confirmation-response).
+      // runtimeStepId is the real runtime step id so consumers can
+      // correlate the pending approval with the step that will run.
       stepId: pc.call.id,
+      runtimeStepId: pc.step.id,
       description,
       action: actionJson,
     });
@@ -1168,7 +1484,9 @@ export class AgentOrchestrator {
   private announceExecution(pc: PendingCall): void {
     const toolName = pc.call.function.name;
     this.setState('executing', pc.step.description);
-    this.emit('tool-execution', { toolName, args: pc.args, state: 'executing' });
+    // stepId is the real runtime identity of this step: consumers (e.g.
+    // the agency registry) can correlate start→settle for the SAME call.
+    this.emit('tool-execution', { toolName, args: pc.args, state: 'executing', stepId: pc.step.id });
     this.emit('activity', { type: 'executing', content: pc.step.description });
   }
 
@@ -1190,7 +1508,7 @@ export class AgentOrchestrator {
     // Immediate feedback + visible activity row.
     pc.step.state = 'executing';
     pc.step.startTime = Date.now();
-    this.emit('tool-execution', { toolName, args: pc.args, state: 'executing' });
+    this.emit('tool-execution', { toolName, args: pc.args, state: 'executing', stepId: pc.step.id });
 
     // Execute the tool with retry for transient errors.
     // (The assistant message carrying this tool call was already added to
@@ -1206,6 +1524,7 @@ export class AgentOrchestrator {
       pc.step.state = 'retrying';
       pc.step.attempts++;
       logger.info('orchestrator', `Retrying tool ${toolName} (attempt ${retries + 1})`);
+      this.emit('tool-execution', { toolName, args: pc.args, state: 'retrying', stepId: pc.step.id });
       this.emit('activity', { type: 'retrying', content: `Retrying ${toolName} (attempt ${retries + 1})...` });
       await this.sleep(1000 * retries); // Exponential backoff
       result = await this.toolRegistry.execute(toolName, pc.args);
@@ -1282,6 +1601,32 @@ export class AgentOrchestrator {
     } else {
       this.repeatedActionCount = 0;
       this.lastActionFingerprint = '';
+    }
+
+    // Capture VERIFIED evidence for layered memory (§20+): only real
+    // verification payloads (browser) and real exit codes (terminal)
+    // are kept — never tool prose.
+    this.captureRunObservation(pc, result);
+  }
+
+  /** Keep verified URL/title (browser) and exit codes (terminal) from a settled call. */
+  private captureRunObservation(pc: PendingCall, result: ToolResult): void {
+    if (!result.success || !result.data) return;
+    const v = (result.data as Record<string, unknown>).verification as
+      | { status?: string; evidence?: unknown }
+      | undefined;
+    if (v && v.status === 'SUCCESS') {
+      const loc = v.evidence as { url?: string; title?: string } | null | undefined;
+      if (loc && typeof loc.url === 'string') {
+        this.runObservations.set(pc.step.id, {
+          url: loc.url.slice(0, 300),
+          title: typeof loc.title === 'string' ? loc.title.slice(0, 150) : undefined,
+        });
+      }
+    }
+    const exitCode = (result.data as Record<string, unknown>).exitCode;
+    if (typeof exitCode === 'number') {
+      this.runObservations.set(pc.step.id, { ...this.runObservations.get(pc.step.id), exitCode });
     }
   }
 
