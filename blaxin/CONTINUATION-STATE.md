@@ -56,6 +56,19 @@ path); HUD polling audit clean (page-scoped hooks, visibility-gated
 metrics, WS-driven HUD; global polls: brain-status 5s resync fallback with
 faster WS events + HUD network 2s — both justified, no changes).
 
+### FINAL CERTIFICATION (end of session, all evidence)
+- Server tsc clean; FULL suite **609 passed / 6 skipped / 0 failed** (the 6
+  skips = env-gated real-Chrome/live-LLM).
+- Client `tsc -b` + `vite build` clean; E2E **8/8** (18s).
+- Real-Chrome CDP suite **5/5** (4.7s).
+- Packaged v1.4.0 .deb: current code (symbol-verified) + REAL runtime smoke
+  (health → WS task → task-complete → episode in /api/memory/layers).
+- README architecture section now documents the real JARVIS command layer,
+  mission control, agency registry, layered memory and
+  verification-in-depth (§28 documentation currency).
+- Commits this session: **81faad2** (tool verification-in-depth, 22 tests),
+  **42be7c5** (bundle-sync guard + packaging fix). Both pushed to main.
+
 ### NEXT EXACT ACTION
 - The v1.4.0 .deb on disk is now REAL (current code, runtime-verified).
 - Before any tag: re-run the full ladder once more, then tag v1.4.0 (CI

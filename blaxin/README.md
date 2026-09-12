@@ -2,22 +2,50 @@
 
 A futuristic, production-quality AI desktop agent capable of understanding user instructions, planning tasks, interacting with the computer's GUI/desktop, using applications, working with files, using the browser, and completing multi-step tasks.
 
-## Architecture
-
-```
+## Architecture```
 BLAXIN UI (React + Vite)
     ↓
+Jarvis Command Layer (v1.4.0): deterministic fast-path router →
+  simple commands ("open example.com", "take a screenshot", "list /tmp")
+  execute directly with ZERO model calls; slash commands (/status, /queue,
+  /missions) run locally; ambiguous/complex goals escalate ↓
 Agent Orchestrator (WebSocket)
     ↓
 Provider Abstraction Layer
     ↓
 Cloud Provider (OpenRouter/OpenAI/Anthropic/Google/Groq/Together)
-    or
+                 or
 Local Provider (Ollama — local daemon, or an Oracle Cloud node
                  tunneled to your loopback)
     ↓
 Model
 ```
+
+Supporting subsystems (all real, inspectable state — no simulated UI data):
+
+- **Mission Control**: persistent multi-step missions with per-step
+  checkpoints, pause/resume-from-checkpoint, retry-failed-only; a single
+  scheduler feeds queued tasks + mission steps to the orchestrator and
+  settles them from real agent-state events.
+- **Agency Registry**: every actual tool execution becomes an observable
+  worker (real runtime step ids, real lifecycle events) — the HUD agency
+  panel can only show what really ran.
+- **Layered Memory (v1.4.0)**: failure / environment / episodic / procedural
+  stores with secret redaction and honest degradation; a relevance-gated,
+  budget-capped advisor injects background context into the LLM system
+  prompt (the current user instruction always outranks memory); at task end
+  the orchestrator records one bounded episode per task, failure lessons
+  from real failed tool steps, and environment observations only when
+  browser verification produced real URL evidence. Inspectable via the
+  Memory page and `GET /api/memory/layers`.
+- **Verification-in-depth**: browser actions verify against the real page
+  (URL/title/text/element/playback, tri-state — UNKNOWN never becomes
+  SUCCESS); terminal commands report real exit codes (a nonzero exit is a
+  failure even with stdout); app launches are verified by aliveness
+  read-back; mouse/window actions read the real pointer/active-window back;
+  clipboard writes are verified by read-back; screenshots validate the
+  capture is a real PNG. Where verification is impossible (e.g. Wayland
+  pointer position), the result says so explicitly instead of implying it.
 
 Since v1.2.0 BLAXIN also ships a **local model system** (real hardware
 discovery, a curated model catalog, deterministic fit recommendation
@@ -52,8 +80,9 @@ The standalone Brain runs the real LLM path: configure its provider and model wi
 - **Oracle Cloud Models (v1.2.0)**: connect an OCI account (RSA-SHA256 signed API, credentials encrypted at rest), discover real shapes/quotas/instances, and provision a resumable, cancellable inference node whose model endpoint reaches the Brain over a loopback SSH tunnel — never a public port
 - **Agent Task Engine**: state machine, step tracking, retry/backoff, provider fallback, loop detection, confirmation gate for high-impact tool actions, and a persistent task queue with priorities, dependency gating and pause/resume/cancel (survives restarts)
 - **Missions (v1.4.0)**: multi-step persistent missions with per-step checkpoints — pause and resume from the last completed checkpoint, retry only failed steps, real progress 0-1
-- **Jarvis HUD (v1.4.0)**: the approved `design/blaxin_os.html` command-center interface, fully functional: boot overlay gated on the real backend connection, neural status, memory bank, live task queue with actions, 5-tab agent terminal (real event stream + slash-command composer), network hub (real RX/TX telemetry), security vault (real persisted security log), activity ticker. Commands: `/help /status /clear /stop /memory /queue /missions /mission-new /version`
+- **Jarvis HUD (v1.4.0)**: the approved `design/blaxin_os.html` command-center interface, fully functional: boot overlay gated on the real backend connection, neural status, memory bank, live task queue with actions, 5-tab agent terminal (real event stream + slash-command composer), network hub (real RX/TX telemetry), security vault (real persisted security log), agency panel (real tool-execution workers), layered-memory panel, activity ticker, mission checkpoint reporting. Commands: `/help /status /clear /stop /memory /queue /missions /mission-new /version`
 - **Task Memory**: persistent, searchable, deletable memory that never stores secrets
+- **Layered Memory (v1.4.0)**: failure/environment/episodic/procedure stores, relevance-gated advisor read-back, task-end episode + failure recording, `GET /api/memory/layers` inspection
 - **Desktop Control**: Mouse, keyboard, window management via xdotool/ydotool
 - **File System**: Read, write, create, delete files and directories (protected against system/credential paths)
 - **Terminal**: Execute shell commands with timeout protection and dangerous-command confirmation
