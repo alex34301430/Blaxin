@@ -1,5 +1,5 @@
 import { Tool, ToolResult } from '../types.js';
-import { exec, execFile } from 'child_process';
+import { exec, execFile, spawn } from 'child_process';
 import { promisify } from 'util';
 
 const execAsync = promisify(exec);
@@ -10,6 +10,17 @@ type DisplayServer = 'x11' | 'wayland' | 'unknown';
 // Keys are never passed through a shell; this charset guard simply
 // prevents nonsense input from reaching xdotool/ydotool.
 const KEY_SAFE_PATTERN = /^[A-Za-z0-9_+\-.]{1,40}$/;
+
+/**
+ * Injectable command runner (verification seam). The default runs the real
+ * commands; tests inject fakes to drive honest-success / honest-failure
+ * paths deterministically.
+ */
+export type ControlRunner = (
+  cmd: string,
+  args: string[],
+  timeoutMs: number
+) => Promise<{ stdout: string; stderr: string }>;
 
 export class ComputerControlTool implements Tool {
   name = 'computer-control';
@@ -52,6 +63,8 @@ export class ComputerControlTool implements Tool {
     },
   };
 
+  constructor(private runner: ControlRunner = (cmd, args, timeoutMs) => execFileAsync(cmd, args, { timeout: timeoutMs, env: { ...process.env, DISPLAY: process.env.DISPLAY || ':0' } })) {}
+
   private async detectDisplayServer(): Promise<DisplayServer> {
     if (this.displayServer !== 'unknown') return this.displayServer;
 
@@ -62,11 +75,11 @@ export class ComputerControlTool implements Tool {
     } else {
       // Try to detect
       try {
-        await execAsync('which xdotool', { timeout: 2000 });
+        await this.runner('which', ['xdotool'], 2000);
         this.displayServer = 'x11';
       } catch {
         try {
-          await execAsync('which ydotool', { timeout: 2000 });
+          await this.runner('which', ['ydotool'], 2000);
           this.displayServer = 'wayland';
         } catch {
           this.displayServer = 'x11'; // Default fallback
@@ -79,12 +92,8 @@ export class ComputerControlTool implements Tool {
 
   /** Run a command with explicit argv — no shell interpolation. */
   private async runTool(args: string[], timeout = 10000): Promise<string> {
-    const env = {
-      ...process.env,
-      DISPLAY: process.env.DISPLAY || ':0',
-    };
     try {
-      const { stdout } = await execFileAsync(args[0], args.slice(1), { timeout, env });
+      const { stdout } = await this.runner(args[0], args.slice(1), timeout);
       return stdout.trim();
     } catch (error: any) {
       throw new Error(`${args[0]} failed: ${error.message}`);
@@ -207,6 +216,24 @@ export class ComputerControlTool implements Tool {
     }
   }
 
+  /**
+   * Verification read-back for mouse motion: xdotool getmouselocation
+   * returns "x:100 y:200 screen:0 ..." — compare against the requested
+   * coordinates. Returns the real position, or null when the read-back
+   * itself is unavailable (e.g. Wayland).
+   */
+  private async readMousePosition(): Promise<{ x: number; y: number } | null> {
+    try {
+      const pos = await this.runTool(['xdotool', 'getmouselocation']);
+      const mx = /x:(\d+)/.exec(pos);
+      const my = /y:(\d+)/.exec(pos);
+      if (mx && my) return { x: Number(mx[1]), y: Number(my[1]) };
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   async execute(args: Record<string, unknown>): Promise<ToolResult> {
     const action = args.action as string;
 
@@ -217,7 +244,23 @@ export class ComputerControlTool implements Tool {
           const y = this.num(args.y, 'y');
           await this.moveMouse(x, y);
           await this.clickMouse(1);
-          return { success: true, output: `Clicked at (${x}, ${y})` };
+          // Verification-in-depth: read the REAL pointer position back and
+          // compare with what was requested. Exit 0 alone only proves the X
+          // server accepted the request, not that the pointer is there.
+          const real = await this.readMousePosition();
+          if (real) {
+            if (Math.abs(real.x - x) > 2 || Math.abs(real.y - y) > 2) {
+              return {
+                success: false,
+                output: '',
+                error: `Click NOT verified: pointer is at (${real.x}, ${real.y}), not the requested (${x}, ${y})`,
+                data: { requested: { x, y }, actual: real },
+              };
+            }
+            return { success: true, output: `Clicked at (${x}, ${y}) — verified pointer at (${real.x}, ${real.y})`, data: { requested: { x, y }, actual: real } };
+          }
+          // No read-back available (e.g. Wayland): honest about what is known.
+          return { success: true, output: `Click requested at (${x}, ${y}) — executed (position read-back unavailable)`, data: { requested: { x, y }, verified: false } };
         }
 
         case 'mouse_double_click': {
@@ -229,7 +272,18 @@ export class ComputerControlTool implements Tool {
           } else {
             await this.xdotoolDoubleClick(x, y);
           }
-          return { success: true, output: `Double-clicked at (${x}, ${y})` };
+          const real = await this.readMousePosition();
+          if (real && (Math.abs(real.x - x) > 2 || Math.abs(real.y - y) > 2)) {
+            return {
+              success: false,
+              output: '',
+              error: `Double-click NOT verified: pointer is at (${real.x}, ${real.y}), not the requested (${x}, ${y})`,
+              data: { requested: { x, y }, actual: real },
+            };
+          }
+          return real
+            ? { success: true, output: `Double-clicked at (${x}, ${y}) — verified pointer at (${real.x}, ${real.y})`, data: { requested: { x, y }, actual: real } }
+            : { success: true, output: `Double-click requested at (${x}, ${y}) — executed (position read-back unavailable)`, data: { requested: { x, y }, verified: false } };
         }
 
         case 'mouse_right_click': {
@@ -237,14 +291,36 @@ export class ComputerControlTool implements Tool {
           const y = this.num(args.y, 'y');
           await this.moveMouse(x, y);
           await this.clickMouse(3);
-          return { success: true, output: `Right-clicked at (${x}, ${y})` };
+          const real = await this.readMousePosition();
+          if (real && (Math.abs(real.x - x) > 2 || Math.abs(real.y - y) > 2)) {
+            return {
+              success: false,
+              output: '',
+              error: `Right-click NOT verified: pointer is at (${real.x}, ${real.y}), not the requested (${x}, ${y})`,
+              data: { requested: { x, y }, actual: real },
+            };
+          }
+          return real
+            ? { success: true, output: `Right-clicked at (${x}, ${y}) — verified pointer at (${real.x}, ${real.y})`, data: { requested: { x, y }, actual: real } }
+            : { success: true, output: `Right-click requested at (${x}, ${y}) — executed (position read-back unavailable)`, data: { requested: { x, y }, verified: false } };
         }
 
         case 'mouse_move': {
           const x = this.num(args.x, 'x');
           const y = this.num(args.y, 'y');
           await this.moveMouse(x, y);
-          return { success: true, output: `Moved mouse to (${x}, ${y})` };
+          const real = await this.readMousePosition();
+          if (real && (Math.abs(real.x - x) > 2 || Math.abs(real.y - y) > 2)) {
+            return {
+              success: false,
+              output: '',
+              error: `Mouse move NOT verified: pointer is at (${real.x}, ${real.y}), not the requested (${x}, ${y})`,
+              data: { requested: { x, y }, actual: real },
+            };
+          }
+          return real
+            ? { success: true, output: `Moved mouse to (${x}, ${y}) — verified`, data: { requested: { x, y }, actual: real } }
+            : { success: true, output: `Mouse move requested to (${x}, ${y}) — executed (position read-back unavailable)`, data: { requested: { x, y }, verified: false } };
         }
 
         case 'mouse_drag': {
@@ -262,7 +338,18 @@ export class ComputerControlTool implements Tool {
             await this.runTool(['xdotool', 'mousemove', String(x), String(y), 'mousedown', '1',
               'mousemove', String(endX), String(endY), 'mouseup', '1']);
           }
-          return { success: true, output: `Dragged from (${x}, ${y}) to (${endX}, ${endY})` };
+          const real = await this.readMousePosition();
+          if (real && (Math.abs(real.x - endX) > 2 || Math.abs(real.y - endY) > 2)) {
+            return {
+              success: false,
+              output: '',
+              error: `Drag NOT verified: pointer ended at (${real.x}, ${real.y}), not the requested end (${endX}, ${endY})`,
+              data: { from: { x, y }, requestedEnd: { x: endX, y: endY }, actual: real },
+            };
+          }
+          return real
+            ? { success: true, output: `Dragged from (${x}, ${y}) to (${endX}, ${endY}) — verified`, data: { from: { x, y }, end: { x: endX, y: endY }, actual: real } }
+            : { success: true, output: `Drag requested from (${x}, ${y}) to (${endX}, ${endY}) — executed (position read-back unavailable)`, data: { from: { x, y }, end: { x: endX, y: endY }, verified: false } };
         }
 
         case 'type_text': {
@@ -273,7 +360,11 @@ export class ComputerControlTool implements Tool {
           } else {
             await this.xdotoolType(text);
           }
-          return { success: true, output: `Typed text (${text.length} chars)` };
+          // Honest phrasing: exit 0 proves the synthetic-key events were sent;
+          // whether a focused window received them cannot be read back
+          // without a display-specific observation (screenshot is the
+          // observation layer for that).
+          return { success: true, output: `Typed text (${text.length} chars) — events sent to the focused window (receiver not verified)`, data: { chars: text.length, verified: false } };
         }
 
         case 'key_press':
@@ -288,7 +379,7 @@ export class ComputerControlTool implements Tool {
           } else {
             await this.xdotoolKey(key);
           }
-          return { success: true, output: `Pressed key: ${key}` };
+          return { success: true, output: `Pressed key: ${key} (event sent; receiver not verified)`, data: { key, verified: false } };
         }
 
         case 'scroll': {
@@ -303,7 +394,7 @@ export class ComputerControlTool implements Tool {
               await this.xdotoolClick(Number(btn));
             }
           }
-          return { success: true, output: `Scrolled ${amount} clicks` };
+          return { success: true, output: `Scrolled ${amount} clicks (events sent; scroll effect not verified)` };
         }
 
         case 'scroll_up': {
@@ -313,7 +404,7 @@ export class ComputerControlTool implements Tool {
           } else {
             await this.xdotoolClick(4);
           }
-          return { success: true, output: 'Scrolled up' };
+          return { success: true, output: 'Scrolled up (events sent; scroll effect not verified)' };
         }
 
         case 'scroll_down': {
@@ -323,24 +414,72 @@ export class ComputerControlTool implements Tool {
           } else {
             await this.xdotoolClick(5);
           }
-          return { success: true, output: 'Scrolled down' };
+          return { success: true, output: 'Scrolled down (events sent; scroll effect not verified)' };
         }
 
         case 'launch_app': {
           const app = String(args.app ?? '').trim();
           if (!app) return { success: false, output: '', error: 'App name is required' };
+          // Never pass the app string through a shell; resolve it like a PATH
+          // executable. Launch DETACHED so the app outlives this tool call —
+          // the old execFileAsync('nohup', [app], { timeout: 5000 }) version
+          // SIGTERM-killed the freshly launched app after 5 seconds and then
+          // claimed "Launched: app" (fake success + real damage).
           const env = { ...process.env, DISPLAY: process.env.DISPLAY || ':0' };
+          // spawn() does NOT throw synchronously for ENOENT — it emits an
+          // async 'error' event, so the launch attempt must be awaited via
+          // the 'spawn' (success) / 'error' (failure) events.
           try {
-            await execFileAsync('nohup', [app], { timeout: 5000, env });
-            return { success: true, output: `Launched: ${app}` };
+            await new Promise<void>((resolve, reject) => {
+              const child = spawn(app, [], { detached: true, stdio: 'ignore', env });
+              child.once('spawn', () => { child.unref(); resolve(); });
+              child.once('error', (err) => reject(err));
+            });
           } catch {
+            // ENOENT etc.: not launchable directly — try xdg-open (handlers,
+            // .desktop entries, URLs) through the runner seam before giving up.
             try {
-              await execFileAsync('nohup', ['xdg-open', app], { timeout: 5000, env });
-              return { success: true, output: `Launched via xdg-open: ${app}` };
-            } catch (error: any) {
-              return { success: false, output: '', error: `Failed to launch ${app}: ${error.message}` };
+              await this.runner('xdg-open', [app], 10000);
+            } catch (xdgError: any) {
+              return {
+                success: false,
+                output: '',
+                error: `Failed to launch ${app}: not found on PATH and xdg-open failed (${xdgError.message})`,
+              };
             }
           }
+
+          // Verification read-back: is the process actually alive after a
+          // short startup window? Uses the shared runner seam so tests can
+          // drive both outcomes. pidof/pgrep match the basename of the app.
+          // For the xdg-open path the handler's process name is unknown, so
+          // the same check runs against the basename — if it does not match
+          // anything, the launch stays UNVERIFIED (never a silent success).
+          const base = app.split('/').pop() || app;
+          let alive = false;
+          try {
+            await new Promise((r) => setTimeout(r, 700));
+            const { stdout } = await this.runner('pgrep', ['-x', base], 3000);
+            alive = stdout.trim().length > 0;
+          } catch {
+            try {
+              // Fallback: pidof (not all systems ship pgrep semantics for -x)
+              const { stdout } = await this.runner('pidof', [base], 3000);
+              alive = stdout.trim().length > 0;
+            } catch {
+              alive = false;
+            }
+          }
+
+          if (!alive) {
+            return {
+              success: false,
+              output: '',
+              error: `Launch NOT verified: no running process named "${base}" after startup window (it may have crashed immediately, been dispatched by xdg-open under a different process name, or the name differs from "${app}")`,
+              data: { app, verified: false },
+            };
+          }
+          return { success: true, output: `Launched: ${app} — verified running process "${base}"`, data: { app, process: base, verified: true } };
         }
 
         case 'focus_window': {
@@ -348,12 +487,26 @@ export class ComputerControlTool implements Tool {
           const ds = await this.detectDisplayServer();
           if (ds === 'wayland') {
             await this.runLiteral('xdg-activate focus 2>/dev/null || true', 3000);
-            return { success: true, output: `Attempted to focus: ${title} (Wayland limited)` };
+            return { success: true, output: `Attempted to focus: ${title} (Wayland limited — focus not verified)` };
           }
           const windowIds = await this.xdotoolSearch(title);
           if (windowIds.length > 0) {
             await this.xdotoolWindowAction(windowIds[0], 'windowactivate', '');
-            return { success: true, output: `Focused window: ${title}` };
+            // Verification read-back: getactivewindow returns the REAL active
+            // window name; a focus that did not take effect is a failure.
+            let active = '';
+            try {
+              active = await this.xdotoolGetActiveWindow();
+            } catch { /* read-back unavailable */ }
+            if (active && !active.toLowerCase().includes(title.toLowerCase())) {
+              return {
+                success: false,
+                output: '',
+                error: `Focus NOT verified: active window is "${active}", expected it to match "${title}"`,
+                data: { requested: title, actualActiveWindow: active },
+              };
+            }
+            return { success: true, output: `Focused window: ${title}${active ? ` — verified (active: "${active}")` : ' (focus read-back unavailable)'}`, data: { requested: title, actualActiveWindow: active || undefined } };
           }
           return { success: false, output: '', error: `Window not found: ${title}` };
         }
@@ -363,17 +516,34 @@ export class ComputerControlTool implements Tool {
           const title = String(args.windowTitle ?? '');
           if (ds === 'wayland') {
             await this.ydotoolKey('alt+F4');
-            return { success: true, output: 'Sent close shortcut (Wayland)' };
+            return { success: true, output: 'Sent close shortcut (Wayland) — window teardown not verified' };
           }
           if (title) {
             const windowIds = await this.xdotoolSearch(title);
             if (windowIds.length > 0) {
+              const before = windowIds.length;
               await this.runTool(['xdotool', 'windowclose', windowIds[0]]);
-              return { success: true, output: `Closed window: ${title}` };
+              // Verification read-back: the closed window must be GONE from
+              // the real window list (bounded re-check).
+              for (let i = 0; i < 5; i++) {
+                await new Promise((r) => setTimeout(r, 300));
+                try {
+                  const after = await this.xdotoolSearch(title);
+                  if (after.length < before) {
+                    return { success: true, output: `Closed window: ${title} — verified gone from window list`, data: { requested: title, verified: true } };
+                  }
+                } catch { /* search failed; treat as unverifiable */ break; }
+              }
+              return {
+                success: false,
+                output: '',
+                error: `Close NOT verified: window "${title}" still present after windowclose`,
+                data: { requested: title, verified: false },
+              };
             }
           }
           await this.xdotoolKey('alt+F4');
-          return { success: true, output: 'Closed active window' };
+          return { success: true, output: 'Sent alt+F4 to active window — teardown not verified' };
         }
 
         case 'minimize_window': {
@@ -381,27 +551,27 @@ export class ComputerControlTool implements Tool {
           const title = String(args.windowTitle ?? '');
           if (ds === 'wayland') {
             await this.ydotoolKey('alt+F9');
-            return { success: true, output: 'Minimized active window (Wayland)' };
+            return { success: true, output: 'Minimized active window (Wayland) — not verified' };
           }
           if (title) {
             const windowIds = await this.xdotoolSearch(title);
             if (windowIds.length > 0) {
               await this.runTool(['xdotool', 'windowminimize', windowIds[0]]);
-              return { success: true, output: `Minimized window: ${title}` };
+              return { success: true, output: `Minimized window: ${title}`, data: { requested: title } };
             }
           }
           await this.xdotoolKey('alt+F9');
-          return { success: true, output: 'Minimized active window' };
+          return { success: true, output: 'Minimized active window (not verified)' };
         }
 
         case 'maximize_window': {
           const ds = await this.detectDisplayServer();
           if (ds === 'wayland') {
             await this.ydotoolKey('super+Up');
-            return { success: true, output: 'Maximized window (Wayland)' };
+            return { success: true, output: 'Maximized window (Wayland) — not verified' };
           }
           await this.xdotoolKey('super+Up');
-          return { success: true, output: 'Maximized active window' };
+          return { success: true, output: 'Maximized active window (not verified)' };
         }
 
         case 'list_windows': {

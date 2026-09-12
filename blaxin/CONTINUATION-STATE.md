@@ -1,5 +1,78 @@
 # BLAXIN Engineering Mission — Continuation State
 
+## SESSION — TOOL VERIFICATION-IN-DEPTH + HUD AUDIT (2026-09-12, PART 8)
+
+Resumed from Part 7 (last commit f009c7a, clean tree). First inspected:
+git log/status, CONTINUATION-STATE, then RE-RAN the full verification ladder
+independently before trusting it: server tsc clean; full suite 586 passed /
+6 skipped (one brain-status-lifecycle timeout under load — passes 8/8 in
+isolation in 1.4s, the documented load-sensitivity class); client tsc +
+vite build clean; E2E 8/8. The memory phase claims were genuine — no rework.
+
+### Verification-in-depth for the remaining non-browser tools (Part 7's NEXT ACTION)
+Audited every non-browser tool for §68 fake-success. Three real violations
+found and FIXED (all with injectable runner seams so honesty is testable
+without a real display):
+1. **computer-control launch_app — REAL BUG, worse than fake success**:
+   `execFileAsync('nohup', [app], { timeout: 5000 })` SIGTERM-KILLED the
+   freshly launched app after 5s (timeout kills the child; nohup execs the
+   app in the same PID) and then returned "Launched: app". Now: detached
+   spawn (app outlives the call; awaited 'spawn'/'error' events — spawn()
+   does NOT throw synchronously on ENOENT) + xdg-open fallback through the
+   runner seam + pgrep/pidof ALIVENESS read-back after a 700ms startup
+   window. No verified process = honest "Launch NOT verified" failure.
+2. **screenshot — fake success**: no capture tool + X display present
+   returned success:true with NO screenshot. Now: honest FAILURE. Plus real
+   capture validation: 0-byte file and non-PNG content (magic-byte check)
+   are failures, not "screenshots" (a tool can exit 0 and write garbage on
+   a dead display).
+3. **clipboard — wrong diagnosis**: xclip exits 0 with empty output for an
+   EMPTY clipboard; the old code fell through to "No clipboard tool
+   available". Now: empty read = success with data.empty=true; all-readers-
+   failed states BOTH plausible causes (tools missing OR empty/unowned
+   clipboard). Writes are verified by READ-BACK compare (exit 0 alone does
+   not prove the write owned the selection) — mismatch or unreadable =
+   honest failure.
+4. **computer-control mouse/window actions — unverified claims → real
+   read-backs**: mouse_click/double/right/move/drag now read the REAL
+   pointer position (xdotool getmouselocation) and FAIL when it is not
+   where requested (±2px); focus_window reads getactivewindow and FAILS on
+   mismatch; close_window re-searches the real window list (bounded 5×300ms
+   poll) and FAILS when the window survives. Where read-back is impossible
+   (Wayland position, keystroke receivers, scroll effect) the output says
+   so EXPLICITLY ("events sent; receiver not verified") and data carries
+   verified:false — honest phrasing, never invented verification. Guard
+   rails untouched (KEY_SAFE_PATTERN, confirmation gates).
+
+Tests: `src/__tests__/tools/tool-verification.test.ts` — 22 tests over the
+new seams (screenshot: no-tool failure, no-file failure, 0-byte, non-PNG,
+real-PNG success; control: launch alive/dead/xdg-open, click verify/fail,
+move read-back-unavailable, focus mismatch/match, close gone/survives,
+key guard, type_text honest phrasing; clipboard: empty-read, both-causes,
+write verified/mismatch/unreadable). FULL suite: **609 passed / 6 skipped /
+0 failed** (586→609).
+
+### HUD fabricated-data audit (Part 7's second NEXT ACTION item)
+Swept all 14 HUD components for simulated state: every data-bearing panel
+(NeuralStatus, MemoryBank, TaskQueue, Agency, SecurityVault, NetworkHub,
+AgentTerminal, JarvisPanel, ActivityTicker, HudHeader, BootOverlay, HudView)
+renders ONLY store fields fed by real WS events or real REST (/api/memory,
+/api/system/network, /api/agency). The only Math.random uses are the brand
+glitch + aria-hidden wave bars (approved decorative design, not data).
+memory-selected + skills-selected handlers confirmed wired in useWebSocket.
+NO fabricated data found — no changes needed.
+
+### NEXT EXACT ACTION (directive priority order)
+- Tools verification-in-depth is now COMPLETE (browser, terminal,
+  filesystem, computer-control, screenshot, clipboard all honest).
+- Continue the JARVIS directive: the deterministic fast path (§Router) and
+  mission-control checkpoint reporting are done; remaining major areas:
+  diagnostics surface, performance pass on the HUD (event-driven, minimal
+  polling), packaging smoke of v1.4.0, then the next release cut (tag
+  v1.4.0 ONLY after a live-LLM-free full pass of the directive checklist).
+
+---
+
 ## SESSION — LAYERED MEMORY INTEGRATION COMPLETED + TERMINAL VERIFICATION (2026-09-12, PART 7)
 
 Resumed from the Part-6 session. Inspected first (git status/diff,
