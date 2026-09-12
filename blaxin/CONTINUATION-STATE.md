@@ -1,5 +1,72 @@
 # BLAXIN Engineering Mission — Continuation State
 
+## SESSION — TOOL VERIFICATION + PACKAGING-INTEGRITY FIX (2026-09-12, PARTS 8–9, SAME SESSION)
+
+### Part 9 — v1.4.0 packaging smoke: STALE-BUNDLE BUG FOUND + FIXED (release-blocking)
+Ran the directive's packaging-integrity item: `cargo tauri build --bundles deb`
+for v1.4.0, then verified the EXTRACTED bundle (not just the build log).
+**Found a real release-blocking bug**: the bundled server dist under
+`resources/blaxin-server/dist/` was last built Sep 9 (v1.3.0 era) — the
+v1.4.0 .deb contained NONE of the shipped work since (skills runtime,
+agency, browser session recovery, layered memory, today's tool
+verification). Symbol-probe of the extracted deb before the fix:
+`selectMemoryAdvisory` 0 hits, `Launch NOT verified` 0 hits. Root cause:
+`tauri.conf.json beforeBuildCommand` was a no-op `echo` and the local
+server→resources sync is a MANUAL step (CI's release.yml does its own
+fresh build+sync, so published releases were unaffected — this was the
+local-build hazard).
+
+Fix (structural, not one-off):
+- Rebuilt server dist (`npm run build`), re-synced
+  `resources/blaxin-server/{dist,package.json,package-lock.json}` (deps
+  verified in sync), rebuilt the deb.
+- **`blaxin/scripts/bundle-sync-guard.sh`** (NEW, wired as
+  `beforeBuildCommand`): fails the build if server/dist or the bundled
+  node_modules are missing; re-syncs dist + manifests when server/dist is
+  newer than the bundled copy; no-op when current (CI path unaffected).
+  Guard tested both ways (current → no-op; touched dist → resync,
+  md5-verified). Tauri runs beforeBuildCommand from the project root, not
+  src-tauri — the command self-locates the script.
+- FINAL deb verified: extracted → symbol probes 2/1 hits (memory advisor +
+  launch verification present).
+
+**Packaged runtime smoke (real, not claimed)**: extracted deb's bundled
+node (v20) + server launched on port 3198 (scratch data dir) →
+`/api/health` {status:ok, version:1.4.0} → REAL WS task through the
+packaged stack (`/ws` + user-message envelope + origin header required):
+full event trail (scheduler→agent-message→tool-execution×3→task-progress→
+task-complete) → `task-complete {kind:direct, totalMs:12, modelCalls:0,
+toolCalls:1}` → `GET /api/memory/layers` shows the REAL episode
+{objective:'list the contents of /tmp', outcome:success, verified:true,
+strategy:'Used tools: filesystem', taskId, confidence:0.8, provenance}.
+The complete JARVIS memory loop runs in the packaged artifact.
+
+Probe gotchas (for future sessions): Tauri updater signing error at build
+end is the documented CI-held-key behavior (deb itself complete); WS probe
+needs the `/ws` path, the `{type:'user-message',data:{content}}` envelope
+and an allowed Origin (else 403/socket hang up); background processes die
+when the invoking shell exits between terminal blocks — launch+probe in
+ONE block; ESM `import 'ws'` from /tmp fails — run the probe from inside
+the package dir with the bundled node.
+
+Also this part: real-Chrome suite re-run 5/5 (4.7s); diagnostics confirmed
+complete end-to-end (runDiagnostics engine + GET /api/diagnostics +
+DiagnosticsPage + SettingsModal tab + SetupWizard + Sidebar entry + intent
+path); HUD polling audit clean (page-scoped hooks, visibility-gated
+metrics, WS-driven HUD; global polls: brain-status 5s resync fallback with
+faster WS events + HUD network 2s — both justified, no changes).
+
+### NEXT EXACT ACTION
+- The v1.4.0 .deb on disk is now REAL (current code, runtime-verified).
+- Before any tag: re-run the full ladder once more, then tag v1.4.0 (CI
+  release.yml does its own fresh build; the guard now also protects local
+  builds).
+- Remaining directive areas after that: continue §-checklist audit
+  (voice/audio physical verification remains environment-blocked; live-LLM
+  round trip remains key-blocked), then next increments.
+
+---
+
 ## SESSION — TOOL VERIFICATION-IN-DEPTH + HUD AUDIT (2026-09-12, PART 8)
 
 Resumed from Part 7 (last commit f009c7a, clean tree). First inspected:

@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "cd ../client && npm run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "echo 'Frontend pre-built or using dev server'",
+    "beforeBuildCommand": "bash -c 'for p in scripts/bundle-sync-guard.sh ../scripts/bundle-sync-guard.sh ../../blaxin/scripts/bundle-sync-guard.sh; do [ -f \"$p\" ] && exec bash \"$p\"; done; echo bundle-sync-guard.sh not found >&2; exit 1'",
     "frontendDist": "../client/dist"
   },
   "app": {
